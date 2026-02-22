@@ -1,0 +1,26 @@
+# heki 配置文件
+# 复制为 heki.conf 后修改
+
+# ---- 面板配置 ----
+panel_type=sspanel
+panel_url=https://your-panel.com
+panel_key=your-api-key
+
+# ---- 节点配置 ----
+node_id=1
+
+# ---- 授权 ----
+heki_key=your-heki-key
+
+# ---- 可选配置 ----
+# server_type=vmess
+# listen_port=443
+# force_vmess_aead=true
+
+# ---- 证书（自动申请） ----
+# cert_domain=your-domain.com
+# cert_mode=http
+
+# ---- 日志 ----
+# log_level=info
+# log_file_dir=/var/log/heki

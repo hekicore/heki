@@ -1,0 +1,16 @@
+version: "3"
+services:
+  heki:
+    image: hekicore/heki:latest
+    restart: on-failure
+    network_mode: host
+    environment:
+      type: sspanel-uim
+      node_id: 1
+      heki_key: xxx
+      webapi_url: https://xxx.com/
+      webapi_key: xxxxxx
+      # force_close_ssl: 'false'
+      # forbidden_bit_torrent: 'true'
+    volumes:
+      - /etc/heki/:/etc/heki/
