@@ -1,0 +1,18 @@
+version: "3"
+services:
+  heki:
+    image: hekicore/heki:latest
+    restart: on-failure
+    network_mode: host
+    environment:
+      type: sspanel-uim
+      panel_url: https://your-panel.com
+      panel_key: your-api-key
+      node_id: 1
+      heki_key: your-heki-license-key
+      # 可选配置
+      # log_level: info
+      # cert_domain: your-domain.com
+      # cert_mode: http
+    volumes:
+      - /etc/heki/:/etc/heki/
