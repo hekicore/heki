@@ -11,22 +11,27 @@ cur_dir=$(pwd)
 [[ $EUID -ne 0 ]] && echo -e "${red}错误：${plain} 必须使用root用户运行此脚本！\n" && exit 1
 
 # check os
-if [[ -f /etc/redhat-release ]]; then
-    release="centos"
-elif cat /etc/issue | grep -Eqi "debian"; then
-    release="debian"
-elif cat /etc/issue | grep -Eqi "ubuntu"; then
-    release="ubuntu"
-elif cat /etc/issue | grep -Eqi "centos|red hat|redhat"; then
-    release="centos"
-elif cat /proc/version | grep -Eqi "debian"; then
-    release="debian"
-elif cat /proc/version | grep -Eqi "ubuntu"; then
-    release="ubuntu"
-elif cat /proc/version | grep -Eqi "centos|red hat|redhat"; then
-    release="centos"
+if [[ -f /etc/os-release ]]; then
+    . /etc/os-release
+
+    case "$ID" in
+        centos|rhel|rocky|almalinux|fedora)
+            release="centos"
+            ;;
+        debian)
+            release="debian"
+            ;;
+        ubuntu)
+            release="ubuntu"
+            ;;
+        *)
+            echo -e "${red}不支持的系统: $ID${plain}\n"
+            exit 1
+            ;;
+    esac
 else
-    echo -e "${red}未检测到系统版本，请联系脚本作者！${plain}\n" && exit 1
+    echo -e "${red}未检测到系统版本，请联系脚本作者！${plain}\n"
+    exit 1
 fi
 
 arch=$(arch)
