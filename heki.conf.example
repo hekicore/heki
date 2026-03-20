@@ -1,0 +1,53 @@
+# heki 配置文件
+# 复制为 heki.conf 后修改
+
+# ---- 面板配置 ----
+# 面板类型，可选: sspanel-uim, xboard, v2board, xiaov2board, ppanel
+type=sspanel-uim
+# server_type 必填，支持: v2ray(vmess), vmess, vless, ss, ssr, trojan, hysteria, tuic, anytls, naive, mieru
+# 混合协议：每个节点可在 /etc/heki/nodes/node_xxx.conf 中设置独立的 server_type
+server_type=v2ray
+panel_url=https://your-panel.com
+panel_key=your-api-key
+
+# ---- 节点配置 ----
+# 单节点
+node_id=1
+# 多节点（一个进程运行多个节点，用逗号分隔）
+# node_id=1,2,3
+
+# ---- 授权 ----
+# 不填写则使用免费版（88 人，全协议，永久免费）
+# 如需更多用户，请购买付费授权
+# heki_key=your-heki-license-key
+
+# ---- 可选配置 ----
+# 同步间隔（秒）
+# check_interval=60
+# 流量上报间隔（秒）
+# submit_interval=120
+
+# ---- 证书（自动申请） ----
+# HTTP 验证（需要 80 端口）
+# cert_domain=your-domain.com
+# cert_mode=http
+# cert_key_length=ec-256
+
+# DNS 验证（Cloudflare 示例）
+# cert_domain=your-domain.com
+# cert_mode=dns
+# cert_key_length=ec-256
+# dns_provider=dns_cf
+# CF_Email=your@email.com
+# CF_Key=your-cloudflare-api-key
+
+# 手动指定证书路径
+# cert_file=/etc/heki/certs/your-domain.com/fullchain.pem
+# key_file=/etc/heki/certs/your-domain.com/private.key
+
+# ---- Reality 配置（VLESS Reality 节点需要） ----
+# reality_private_key=your-x25519-private-key
+
+# ---- 日志 ----
+# log_level=info
+# log_file_dir=/var/log/heki
