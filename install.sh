@@ -59,7 +59,7 @@ for arg in "$@"; do
     esac
 done
 
-if [ "$(getconf WORD_BIT)" != '32' ] && [ "$(getconf LONG_BIT)" != '64' ] ; then
+if [ "$(getconf LONG_BIT 2>/dev/null)" != '64' ] ; then
     echo "本软件不支持 32 位系统(x86)，请使用 64 位系统(x86_64)，如果检测有误，请联系作者"
     exit 2
 fi
@@ -68,6 +68,50 @@ fi
 GITHUB_REPO="hekicore/heki"
 MGMT_SCRIPT_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/master/heki.sh"
 # ================================
+
+require_secure_url() {
+    local url="$1"
+    case "${url}" in
+        https://*)
+            return 0
+            ;;
+        *)
+            echo -e "${red}拒绝使用非 HTTPS 下载地址: ${url}${plain}"
+            return 1
+            ;;
+    esac
+}
+
+download_file() {
+    local url="$1"
+    local out_file="$2"
+
+    require_secure_url "${url}" || return 1
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -o "${out_file}" "${url}"
+        return $?
+    fi
+    wget -O "${out_file}" "${url}"
+}
+
+verify_release_tarball() {
+    local tarball="$1"
+    local listing
+
+    if ! tar -tzf "${tarball}" >/dev/null 2>&1; then
+        echo -e "${red}下载的发布包不是有效的 tar.gz: ${tarball}${plain}"
+        return 1
+    fi
+
+    listing=$(tar -tzf "${tarball}")
+    for required in "heki/heki" "heki/heki.service" "heki/heki@.service" "heki/heki.conf"; do
+        if ! echo "${listing}" | grep -qx "${required}"; then
+            echo -e "${red}发布包缺少必要文件 ${required}: ${tarball}${plain}"
+            return 1
+        fi
+    done
+}
 
 function is_cmd_exist() {
     local cmd="$1"
@@ -126,6 +170,9 @@ install_mgmt_script() {
     tmp_script=$(mktemp)
     local api_url="https://api.github.com/repos/${GITHUB_REPO}/contents/heki.sh"
 
+    require_secure_url "${api_url}" || exit 1
+    require_secure_url "${MGMT_SCRIPT_URL}" || exit 1
+
     if ! curl -fsSL -H "Accept: application/vnd.github.v3.raw" -o "${tmp_script}" "${api_url}"; then
         if ! curl -fsSL -o "${tmp_script}" "${MGMT_SCRIPT_URL}"; then
             rm -f "${tmp_script}"
@@ -175,9 +222,10 @@ download_release_tarball() {
     local url
     for url in "${candidates[@]}"; do
         echo -e "下载地址: ${url}"
-        if wget -N --no-check-certificate -O "${out_file}" "${url}"; then
+        if download_file "${url}" "${out_file}" && verify_release_tarball "${out_file}"; then
             return 0
         fi
+        rm -f "${out_file}"
     done
 
     return 1
@@ -231,8 +279,8 @@ install_heki() {
         fi
     else
         echo -e "开始安装 heki 最新正式版"
-        wget -N --no-check-certificate -O /usr/local/heki.tar.gz https://github.com/${GITHUB_REPO}/releases/latest/download/heki-linux-${arch}.tar.gz
-        if [[ $? -ne 0 ]]; then
+        if ! download_file "https://github.com/${GITHUB_REPO}/releases/latest/download/heki-linux-${arch}.tar.gz" "/usr/local/heki.tar.gz" || \
+            ! verify_release_tarball "/usr/local/heki.tar.gz"; then
             echo -e "${red}下载 heki 失败，请确保你的服务器能够下载 Github 的文件${plain}"
             exit 1
         fi
