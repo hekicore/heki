@@ -1,0 +1,107 @@
+# heki 配置文件
+# 复制为 heki.conf 后修改
+
+# ---- 面板配置 ----
+# 面板类型，可选: sspanel-uim, metron, xboard, v2board, xiaov2board, ppanel
+type=sspanel-uim
+# server_type 必填，支持: v2ray(vmess), vmess, vless, ss, ssr, trojan, hysteria, tuic, anytls, naive, mieru
+# 混合协议节点会在启动时按面板配置自动识别，无需在 /etc/heki/nodes/node_xxx.conf 中单独填写 server_type
+server_type=v2ray
+panel_url=https://your-panel.com
+panel_key=your-api-key
+
+# ---- 节点配置 ----
+# 单节点
+node_id=1
+# 多节点（一个进程运行多个节点，用逗号分隔）
+# node_id=1,2,3
+# 默认会对同端口多节点自动拆分监听 IP，兼容常见旧配置直接迁移
+# 如果想强制按 node_id 顺序一节点一个 IP，可配合下面两项：
+# listen=1.1.1.1,2.2.2.2,3.3.3.3
+# multi_node_listen_strategy=split
+
+# ---- 授权 ----
+# 不填写则使用免费版（88 人，全协议，永久免费）
+# 如需更多用户，请购买付费授权
+# heki_key=your-heki-license-key
+# license_mode=auto
+#
+# 离线客户专用:
+# 1. 普通版默认保持 auto，不配置 offline_license_b64 时行为与现有版本一致
+# 2. 客户专属离线交付可通过构建参数强制 offline-required
+# 3. offline_license_b64 的值为 base64(json(SignedLicense))
+# offline_license_b64=eyJwYXlsb2FkIjoiLi4uIiwic2lnbmF0dXJlIjoiLi4uIn0=
+
+# ---- 可选配置 ----
+# 同步间隔（秒）
+# check_interval=60
+# 流量上报间隔（秒）
+# submit_interval=120
+
+# ---- 证书（自动申请） ----
+# HTTP 验证（需要 80 端口）
+# cert_domain=your-domain.com
+# cert_mode=http
+# cert_key_length=ec-256
+
+# DNS 验证（Cloudflare 示例）
+# cert_domain=your-domain.com
+# cert_mode=dns
+# cert_key_length=ec-256
+# dns_provider=dns_cf
+# CF_Email=your@email.com
+# CF_Key=your-cloudflare-api-key
+
+# 手动指定证书路径
+# cert_file=/etc/heki/certs/your-domain.com/fullchain.pem
+# key_file=/etc/heki/certs/your-domain.com/private.key
+
+# XBoard / xiaov2board 面板补充说明
+# 面板若下发具体的 listen_ip，会在启动时作为该节点的监听地址输入
+# 若面板返回的是 0.0.0.0 / :: 这类通配地址，heki 会视为默认值，不覆盖本地 listen_addr
+# 面板若下发 cert_config，会在本地未显式填写证书项时补全 cert_mode/cert_domain/cert_file/key_file/dns_provider
+# 面板若下发 tls_settings.reject_unknown_sni=1，heki 会在 TLS 握手阶段校验客户端 SNI
+# 面板若下发 routes/custom_outbounds/custom_routes，heki 会优先转换为本地内存路由；若未下发则继续使用本地 routes.toml/routes_url
+# xhttp/splithttp 入站当前仍不支持，若面板下发会直接报错
+
+# ---- Reality 配置（VLESS Reality 节点需要） ----
+# reality_private_key=your-x25519-private-key
+
+# ---- VMess 可选项 ----
+# 强制只允许 VMessAEAD（开启后 alterId 将被忽略，客户端只能使用 AEAD 方式连接）
+# 实测 Clash/Mihomo 等客户端若订阅里仍保留 alterId 字段，哪怕 alterId=0，也可能继续走 legacy VMess。
+# 如果希望客户端稳定走 VMessAEAD，请在面板/订阅下发中直接删除 alterId 字段，不要仅写 alterId=0。
+# force_vmess_aead=false
+# 强制只允许旧版 VMessMD5（用于兼容只支持 legacy md5 的客户端；开启后会拒绝 VMessAEAD）
+# 现在只要面板下发 alterId>0，heki 默认就会自动锁到 MD5-only；若仍想忽略 alterId 并坚持 AEAD，请显式开启 force_vmess_aead=true。
+# force_vmess_md5=false
+# 注意：force_vmess_aead 和 force_vmess_md5 不能同时为 true
+
+# ---- VLESS Encryption（服务端入口） ----
+# 留空则关闭；面板若下发合法 decryption/encryption_settings 也会自动识别
+# 当前不支持与 xtls-rprx-vision / fallback 混用
+# vless_decryption=mlkem768x25519plus.native.600s.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+
+# ---- TUIC 可选项 ----
+# 拥塞控制算法（默认 bbr）
+# tuic_congestion_control=bbr
+# 0-RTT 握手（默认 true；对接面板时通常以面板下发值为准）
+# tuic_zero_rtt_handshake=true
+# 认证超时（秒）
+# tuic_auth_timeout=3
+# 心跳间隔（秒）
+# tuic_heartbeat=10
+# QUIC 接收窗口（MB；默认 2 / 6 / 3 / 15）
+# tuic_initial_stream_window=2
+# tuic_max_stream_window=6
+# tuic_initial_conn_window=3
+# tuic_max_conn_window=15
+
+# ---- AnyTLS 可选项 ----
+# 自定义 padding scheme（base64 编码；留空使用默认值）
+# 面板若下发 padding_scheme，且本地未显式填写 anytls_padding_scheme，会自动接管
+# anytls_padding_scheme=BASE64_ENCODED_PADDING_SCHEME
+
+# ---- 日志 ----
+# log_level=info
+# log_file_dir=/var/log/heki
