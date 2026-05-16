@@ -1,0 +1,147 @@
+# heki 配置文件
+# 复制为 heki.conf 后修改
+
+# ---- 面板配置 ----
+# 面板类型，可选: sspanel-uim, metron, xboard, v2board, xiaov2board, ppanel, heki-v1
+type=sspanel-uim
+# server_type 必填，支持: v2ray(vmess), vmess, vless, ss, ssr, trojan, hysteria, tuic, anytls, naive, mieru
+# 混合协议节点会在启动时按面板配置自动识别，无需在 /etc/heki/nodes/node_xxx.conf 中单独填写 server_type
+server_type=v2ray
+panel_url=https://your-panel.com
+panel_key=your-api-key
+
+# ---- 节点配置 ----
+# 单节点
+node_id=1
+# 多节点（一个进程运行多个节点，用逗号分隔）
+# node_id=1,2,3
+# 默认 auto 只会对“同端口”的多节点自动拆分监听 IP，兼容常见旧配置直接迁移
+# 如果不同节点端口不同，它们会各自从 listen 列表的第一个 IP 开始分配
+# 如果想强制按 node_id 顺序一节点一个 IP，可配合下面两项：
+# listen=1.1.1.1,2.2.2.2,3.3.3.3
+# multi_node_listen_strategy=split
+# 多 IP 服务器若希望 Hysteria2 / TUIC / Mieru / Naive / SS UDP / SSR obfs UDP
+# 都稳定做到“哪个入口 IP 进来，就从哪个 IP 出去”，建议显式配置：
+# listen=all
+# auto_out_ip=true
+
+# ---- 授权 ----
+# 不填写则使用免费版（88 人，全协议，永久免费）
+# 如需更多用户，请购买付费授权
+# heki_key=your-heki-license-key
+
+# ---- 可选配置 ----
+# 同步间隔（秒）
+# check_interval=60
+# 流量上报间隔（秒）
+# submit_interval=60
+
+# ---- Proxy Protocol（可选）----
+# Docker / docker-compose 可直接用同名环境变量覆盖这些配置。
+# proxy_protocol：TCP 入站是否接收 Proxy Protocol
+# udp_proxy_protocol：SS / SSR 的 UDP relay 是否接收 Proxy Protocol v2
+# force_proxy_protocol：是否强制要求客户端必须发送 Proxy Protocol
+# 注意：splithttp/xhttp 不能与 proxy_protocol 同开
+# proxy_protocol=false
+# udp_proxy_protocol=false
+# force_proxy_protocol=false
+
+# ---- 规则与路由文件（可选）----
+# CLI `-r/-b/-w/-d` 优先，其次使用这里的配置；
+# 如果都不写，默认回退到 heki.conf 同目录下的 routes.toml / blockList / whiteList / dns.yml
+# routes_file=/etc/heki/routes.toml
+# block_list_file=/etc/heki/blockList
+# white_list_file=/etc/heki/whiteList
+# dns_rules_file=/etc/heki/dns.yml
+
+# ---- 证书（自动申请） ----
+# HTTP 验证（需要 80 端口）
+# cert_domain=your-domain.com
+# cert_mode=http
+# cert_key_length=ec-256
+# acme_server=letsencrypt
+
+# DNS 验证（Cloudflare 示例）
+# cert_domain=your-domain.com
+# cert_mode=dns
+# cert_key_length=ec-256
+# acme_server=zerossl
+# dns_provider=dns_cf
+# DNS_CF_Email=your@email.com
+# DNS_CF_Key=your-cloudflare-api-key
+
+# 手动指定证书路径
+# cert_file=/etc/heki/certs/your-domain.com/fullchain.pem
+# key_file=/etc/heki/certs/your-domain.com/private.key
+
+# XBoard / xiaov2board 面板补充说明
+# 面板若下发具体的 listen_ip，会在启动时作为该节点的监听地址输入
+# 若面板返回的是 0.0.0.0 / :: 这类通配地址，heki 会视为默认值，不覆盖本地 listen_addr
+# 面板若下发 cert_config，会在本地未显式填写证书项时补全 cert_mode/cert_domain/cert_file/key_file/dns_provider
+# 面板若下发 tls_settings.reject_unknown_sni=1，heki 会在 TLS 握手阶段校验客户端 SNI
+# 面板若下发 routes/custom_outbounds/custom_routes，heki 会优先按面板路由匹配；未命中时再继续使用本地 routes_file/routes_url（未显式配置 routes_file 时默认回退到同目录 routes.toml）
+# 面板下发 xhttp 时，heki 会在运行时规范化为 splithttp；继续复用 path/host 以及可选的 xhttp_mode/xhttp_extra
+
+# ---- Reality 配置（VLESS Reality 节点需要） ----
+# reality_private_key=your-x25519-private-key
+
+# ---- VMess 可选项 ----
+# 强制只允许 VMessAEAD（开启后 alterId 将被忽略，客户端只能使用 AEAD 方式连接）
+# 实测 Clash/Mihomo 等客户端若订阅里仍保留 alterId 字段，哪怕 alterId=0，也可能继续走 legacy VMess。
+# 如果希望客户端稳定走 VMessAEAD，请在面板/订阅下发中直接删除 alterId 字段，不要仅写 alterId=0。
+# force_vmess_aead=false
+# 强制只允许旧版 VMessMD5（用于兼容只支持 legacy md5 的客户端；开启后会拒绝 VMessAEAD）
+# 现在只要面板下发 alterId>0，heki 默认就会自动锁到 MD5-only；若仍想忽略 alterId 并坚持 AEAD，请显式开启 force_vmess_aead=true。
+# force_vmess_md5=false
+# 注意：force_vmess_aead 和 force_vmess_md5 不能同时为 true
+
+# ---- VLESS Encryption（服务端入口） ----
+# vless_flow=none 会被视为未启用 flow；只有 xtls-rprx-vision 会启用 Vision
+# 留空则关闭；面板若下发合法 decryption/encryption_settings 也会自动识别
+# 当前不支持与 xtls-rprx-vision / fallback 混用
+# vless_decryption=mlkem768x25519plus.native.600s.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+
+# ---- TUIC 可选项 ----
+# 拥塞控制算法（默认 cubic）
+# 对接面板时，若面板下发 congestion_control=bbr / cubic / new_reno，会按面板值生效
+# tuic_congestion_control=cubic
+# 0-RTT 握手（默认 true；对接面板时通常以面板下发值为准）
+# tuic_zero_rtt_handshake=true
+# 认证超时（秒）
+# tuic_auth_timeout=3
+# 心跳间隔（秒）
+# tuic_heartbeat=10
+# QUIC 接收窗口（MB；默认 2 / 6 / 3 / 15）
+# tuic_initial_stream_window=2
+# tuic_max_stream_window=6
+# tuic_initial_conn_window=3
+# tuic_max_conn_window=15
+
+# ---- Mieru 可选项 ----
+# 默认关闭以优先兼容不携带 user hint 的旧版或第三方 Mieru 客户端
+# 多用户节点如需降低异常连接或缺少 user hint 时的 CPU 消耗，可设为 true
+# mieru_user_hint_is_mandatory=false
+
+# ---- AnyTLS 可选项 ----
+# 自定义 padding scheme（base64 编码；留空使用默认值）
+# 面板若下发 padding_scheme，且本地未显式填写 anytls_padding_scheme，会自动接管
+# anytls_padding_scheme=BASE64_ENCODED_PADDING_SCHEME
+# ECH 需要真实 keyset；面板只有 ech_enable/ech_server_name 时不会启用 ECH
+# anytls_ech_server_keys=BASE64_ECH_KEYSET
+
+# ---- 日志 ----
+# log_level=info
+# log_file_dir=/var/log/heki
+# log_file_retention_days=7
+
+# ---- pprof 调试接口 ----
+# 默认监听 127.0.0.1:6060；若端口已占用，会自动回退到随机本地端口并打印实际地址
+# 可显式指定，例如：
+# pprof_addr=127.0.0.1:6061
+# 也可关闭：
+# pprof_addr=off
+
+# ---- 时间校准说明 ----
+# SS2022 / VMess / 部分 SSR 协议依赖时间戳校验。
+# heki 会在访问面板 API 时自动参考 HTTP Date 头校准内部协议时钟，
+# 但如果宿主机时间严重漂移且面板时间也不可用，仍可能导致握手失败。
