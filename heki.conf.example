@@ -123,6 +123,11 @@ node_id=1
 # 默认关闭以优先兼容不携带 user hint 的旧版或第三方 Mieru 客户端
 # 多用户节点如需降低异常连接或缺少 user hint 时的 CPU 消耗，可设为 true
 # mieru_user_hint_is_mandatory=false
+# Mieru TCP 回收默认关闭；非零使用 30s、6m30s 等 duration。
+# tcp_idle_timeout 至少 1m，且会回收仍有静默会话的连接。
+# mieru_tcp_idle_timeout=0
+# mieru_handshake_timeout=0
+# mieru_empty_timeout=0
 
 # ---- AnyTLS 可选项 ----
 # 自定义 padding scheme（base64 编码；留空使用默认值）
