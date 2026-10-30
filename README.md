@@ -4,6 +4,8 @@
 
 当前稳定版：`v1.2.9`；发布日期：`2026-10-31`
 
+2026-10-31 再次同版本重发：新增 Hy2 HTTP/3 网站伪装，`hysteria_masquerade` 支持反向代理、静态目录、固定响应，默认关闭；支持环境变量和节点独立覆盖。[配置实例与使用限制](https://hekicore.github.io/heki-docs/#/hysteria/masquerade)。
+
 2026-10-31 同版本重发：新增远程 DNS 定时更新（`dns_rules_url`、`dns_rules_update_interval`）、BT 过滤增强和 ClickHouse gzip（`access_log_clickhouse_gzip`，默认关闭），修复 TUIC 首包缓存并发释放。BT 检测不依赖常见端口，但不能保证封锁加密 BT。
 
 旧版 1.2.9 用户也需执行 `heki update 1.2.9`，或执行 `docker compose pull && docker compose up -d` 拉取镜像并重建容器。版本号不变，可使用 Release 附件 `SHA256SUMS` 核验安装包。

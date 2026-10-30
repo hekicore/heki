@@ -46,6 +46,11 @@ node_id=1
 # access_log_clickhouse_url=http://127.0.0.1:8123
 # access_log_clickhouse_gzip=false
 
+# ---- Hy2 HTTP/3 伪装（可选）----
+# Hy2 HTTP/3 网站伪装：单行 JSON，默认关闭；支持环境变量及节点 [USER] 整体覆盖
+# hysteria_masquerade={"type":"proxy","proxy":{"url":"https://www.example.com/","rewriteHost":true}}
+# 节点设置 hysteria_masquerade={} 可关闭继承的伪装；修改后重启
+
 # ---- Proxy Protocol（可选）----
 # Docker / docker-compose 可直接用同名环境变量覆盖这些配置。
 # proxy_protocol：TCP 入站是否接收 Proxy Protocol；Mieru TCP 也支持
