@@ -4,6 +4,10 @@
 
 当前稳定版：`v1.2.9`；发布日期：`2026-10-31`
 
+2026-10-31 同版本重发：新增远程 DNS 定时更新（`dns_rules_url`、`dns_rules_update_interval`）、BT 过滤增强和 ClickHouse gzip（`access_log_clickhouse_gzip`，默认关闭），修复 TUIC 首包缓存并发释放。BT 检测不依赖常见端口，但不能保证封锁加密 BT。
+
+旧版 1.2.9 用户也需执行 `heki update 1.2.9`，或执行 `docker compose pull && docker compose up -d` 拉取镜像并重建容器。版本号不变，可使用 Release 附件 `SHA256SUMS` 核验安装包。
+
 - 修复 VLESS + Reality/TLS + TCP + Vision 的 UDP（Mux/XUDP）转发
 - XiaoV2Board 支持 Hy2 自签证书下发和 SHA-256 pin 校验；PPanel 自签模式上报实际证书指纹，并兼容新版响应字段
 - Mieru 升级至 3.39.0，握手、空连接与 TCP 无流量超时默认均关闭，可通过 `mieru_handshake_timeout`、`mieru_empty_timeout`、`mieru_tcp_idle_timeout` 自行设置；6 分 30 秒是空连接复用宽限，不是连接数

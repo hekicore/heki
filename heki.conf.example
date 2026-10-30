@@ -36,6 +36,16 @@ node_id=1
 # 流量上报间隔（秒）
 # submit_interval=60
 
+# ---- BT 过滤与访问日志（可选）----
+# 拦截可识别的明文 BT、DHT、UDP tracker、uTP，不能保证封锁加密 BT
+# 全局配置，不支持节点 [USER] 覆盖
+# forbidden_bit_torrent=true
+# ClickHouse 访问日志默认关闭；gzip 压缩上传请求体，默认 false，可在节点 [USER] 覆盖
+# 使用 ClickHouse HTTP(S) 端口，不是 native 9000；压缩仅在后台日志批次中进行
+# access_log_enable=false
+# access_log_clickhouse_url=http://127.0.0.1:8123
+# access_log_clickhouse_gzip=false
+
 # ---- Proxy Protocol（可选）----
 # Docker / docker-compose 可直接用同名环境变量覆盖这些配置。
 # proxy_protocol：TCP 入站是否接收 Proxy Protocol；Mieru TCP 也支持
@@ -53,6 +63,10 @@ node_id=1
 # block_list_file=/etc/heki/blockList
 # white_list_file=/etc/heki/whiteList
 # dns_rules_file=/etc/heki/dns.yml
+# 远程 DNS 规则（可选）：启动拉取，之后定时刷新；成功替代本地规则，失败保留当前规则
+# 启动远程不可用时使用本地 dns.yml；不会覆盖本地文件。间隔单位秒，必须为正整数
+# dns_rules_url=https://rules.example.com/dns.yml
+# dns_rules_update_interval=60
 
 # ---- 证书（自动申请） ----
 # HTTP 验证（需要 80 端口）
