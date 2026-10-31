@@ -4,6 +4,8 @@
 
 当前稳定版：`v1.2.9`；发布日期：`2026-10-31`
 
+最新同版本重发：修复 XHTTP HTTP/3 活跃会话导致停止卡住的问题，补齐连接、上传队列及 UDP 端口回收，无需修改配置。[XHTTP 配置与说明](https://hekicore.github.io/heki-docs/#/other/xhttp-config)。
+
 2026-10-31 再次同版本重发：新增 Hy2 HTTP/3 网站伪装，`hysteria_masquerade` 支持反向代理、静态目录、固定响应，默认关闭；支持环境变量和节点独立覆盖。[配置实例与使用限制](https://hekicore.github.io/heki-docs/#/hysteria/masquerade)。
 
 2026-10-31 同版本重发：新增远程 DNS 定时更新（`dns_rules_url`、`dns_rules_update_interval`）、BT 过滤增强和 ClickHouse gzip（`access_log_clickhouse_gzip`，默认关闭），修复 TUIC 首包缓存并发释放。BT 检测不依赖常见端口，但不能保证封锁加密 BT。
