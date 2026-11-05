@@ -2,9 +2,11 @@
 
 📚 文档: https://hekicore.github.io/heki-docs/
 
-当前稳定版：`v1.2.9`；首次发布日期：`2026-10-31`；最新重发：`2026-11-01`
+当前稳定版：`v1.2.9`；首次发布日期：`2026-10-31`；最新重发：`2026-11-05`
 
-最新同版本重发：修复 VLESS + Reality + TCP + Vision 升级后 HTTPS 连接中断、进程崩溃，以及部分 Mihomo 客户端握手失败的问题。真实 XBoard、官方 Xray/Mihomo 与 Linux amd64/arm64 完整链路验证通过，原有服务端配置无需修改。
+2026-11-05 同版本重发：修复 VMess 节点 API 的 `alterId` 丢失导致连接认证失败。节点 API 已下发 `alterId=1` 时只需更新；若仅客户端订阅下发 `1`、节点 API 未提供，则在新构建中补 `vmess_alter_id=1`。面板显式值（含 `0`）优先。`force_vmess_md5` 仍只选择认证模式，详见 [配置说明](https://hekicore.github.io/heki-docs/#/other/vmess-aead)。
+
+2026-11-01 同版本重发：修复 VLESS + Reality + TCP + Vision 升级后 HTTPS 连接中断、进程崩溃，以及部分 Mihomo 客户端握手失败的问题。真实 XBoard、官方 Xray/Mihomo 与 Linux amd64/arm64 完整链路验证通过，原有服务端配置无需修改。
 
 2026-10-31 同版本重发：修复 XHTTP HTTP/3 活跃会话导致停止卡住的问题，补齐连接、上传队列及 UDP 端口回收，无需修改配置。[XHTTP 配置与说明](https://hekicore.github.io/heki-docs/#/other/xhttp-config)。
 

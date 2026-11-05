@@ -112,6 +112,11 @@ node_id=1
 # 强制只允许旧版 VMessMD5（用于兼容只支持 legacy md5 的客户端；开启后会拒绝 VMessAEAD）
 # 现在只要面板下发 alterId>0，heki 默认就会自动锁到 MD5-only；若仍想忽略 alterId 并坚持 AEAD，请显式开启 force_vmess_aead=true。
 # force_vmess_md5=false
+# force_vmess_md5 只选择认证模式，不设置 alterId 数量。
+# 2026-11-05 重发新增：仅在面板节点 API 未提供 alterId 时使用的本地补充值，范围 0..65535。
+# 若订阅强制 alterId=1 而节点 API 未下发，可在 heki.conf 或同名小写环境变量设置 vmess_alter_id=1。
+# 面板显式值（含 0）优先；不支持节点 [USER] 覆盖。需要包含此修复的新版构建。
+# vmess_alter_id=0
 # 注意：force_vmess_aead 和 force_vmess_md5 不能同时为 true
 
 # ---- VLESS Encryption（服务端入口） ----
