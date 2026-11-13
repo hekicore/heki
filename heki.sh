@@ -15,6 +15,7 @@ BIN_PATH="/usr/local/heki/heki"
 CONFIG_FILE="${INSTALL_DIR}/heki.conf"
 SERVICE_NAME="heki"
 NODE_USER_SECTION_MARKER="# ---- [USER] 用户自定义（修改这里，重启保留）----"
+NODE_USER_SECTION_PATTERN='^[[:space:]]*((#[[:space:]]*)?[[]USER[]][[:space:]]*$|#[[:space:]]*-+[[:space:]]*[[]USER[]]([[:space:]-]|$))'
 SYSTEMD_SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 SYSTEMD_TEMPLATE_SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}@.service"
 OPENRC_SERVICE_FILE="/etc/init.d/${SERVICE_NAME}"
@@ -305,7 +306,7 @@ CFGEOF
     echo ""
     echo -e "${GREEN}已写入实例配置: ${CONFIG_FILE}${NC}"
     echo -e "  type=${GREEN}${panel_type}${NC}"
-    echo -e "  server_type=${GREEN}${server_type}${NC}"
+    echo -e "  面板协议选择/探测提示: ${GREEN}${server_type}${NC}"
     echo -e "  panel_url=${GREEN}${panel_url}${NC}"
     echo -e "  node_id=${GREEN}${node_id}${NC}"
     if [ -n "${license_key}" ]; then
@@ -791,48 +792,6 @@ _node_type_label() {
     esac
 }
 
-_node_save_detect_server_type_hint() {
-    local NODE_ID="$1"
-    local DETECT_TYPE="$2"
-    local NODE_CONF TMP_FILE
-
-    _ensure_node_user_section "${NODE_ID}"
-    NODE_CONF=$(_node_conf_path "${NODE_ID}")
-    TMP_FILE=$(mktemp)
-
-    if awk -v marker="${NODE_USER_SECTION_MARKER}" -v server_type="${DETECT_TYPE}" '
-        BEGIN { in_user = 0; saved = 0 }
-        {
-            trimmed = $0
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", trimmed)
-            if (!in_user && trimmed ~ /^server_type_hint=/) {
-                if (!saved) {
-                    print "server_type_hint=" server_type
-                    saved = 1
-                }
-                next
-            }
-            if (trimmed == marker && !saved) {
-                print "server_type_hint=" server_type
-                saved = 1
-            }
-            if (trimmed == marker) {
-                in_user = 1
-            }
-            print
-        }
-        END {
-            if (!saved) {
-                print "server_type_hint=" server_type
-            }
-        }
-    ' "${NODE_CONF}" > "${TMP_FILE}"; then
-        mv "${TMP_FILE}" "${NODE_CONF}"
-    else
-        rm -f "${TMP_FILE}"
-    fi
-}
-
 _ensure_node_user_section() {
     local NODE_ID="$1"
     local NODE_CONF
@@ -843,12 +802,12 @@ _ensure_node_user_section() {
     if [ ! -f "${NODE_CONF}" ]; then
         printf "%s\n" \
             "# Heki 节点预配置" \
-            "# 该文件由 heki node add 预创建，首次成功启动后会自动补全 [AUTO] 区" \
+            "# 仅保存用户覆盖项；启动快照另存于 .runtime/nodes/，协议请查看节点状态或启动日志" \
             "${NODE_USER_SECTION_MARKER}" > "${NODE_CONF}"
         return
     fi
 
-    if ! grep -Fq "${NODE_USER_SECTION_MARKER}" "${NODE_CONF}" 2>/dev/null; then
+    if ! grep -Eq "${NODE_USER_SECTION_PATTERN}" "${NODE_CONF}" 2>/dev/null; then
         printf "\n%s\n" "${NODE_USER_SECTION_MARKER}" >> "${NODE_CONF}"
     fi
 }
@@ -861,12 +820,12 @@ _node_user_delete_exact_key() {
     [ -f "${NODE_CONF}" ] || return
 
     TMP_FILE=$(mktemp)
-    if awk -v marker="${NODE_USER_SECTION_MARKER}" -v key="${KEY}" '
+    if awk -v marker="${NODE_USER_SECTION_PATTERN}" -v key="${KEY}" '
         BEGIN { in_user = 0 }
         {
             trimmed = $0
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", trimmed)
-            if (trimmed == marker) {
+            if (trimmed ~ marker) {
                 in_user = 1
                 print
                 next
@@ -892,12 +851,12 @@ _node_user_delete_prefix() {
     [ -f "${NODE_CONF}" ] || return
 
     TMP_FILE=$(mktemp)
-    if awk -v marker="${NODE_USER_SECTION_MARKER}" -v prefix="${PREFIX}" '
+    if awk -v marker="${NODE_USER_SECTION_PATTERN}" -v prefix="${PREFIX}" '
         BEGIN { in_user = 0 }
         {
             trimmed = $0
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", trimmed)
-            if (trimmed == marker) {
+            if (trimmed ~ marker) {
                 in_user = 1
                 print
                 next
@@ -1144,7 +1103,6 @@ _guide_new_node_setup() {
     if [ -n "${NODE_LINE}" ]; then
         local D_NID D_TYPE D_TLS D_EXTRA TYPE_LABEL TLS_LABEL AUTO_DOMAIN
         IFS='|' read -r D_NID D_TYPE D_TLS D_EXTRA <<< "${NODE_LINE}"
-        _node_save_detect_server_type_hint "${NODE_ID}" "${D_TYPE}"
         TYPE_LABEL=$(_node_type_label "${D_TYPE}")
         if [ "${D_TYPE}" = "ss" ] && printf '%s' "${D_EXTRA}" | grep -q 'method=2022-'; then
             TYPE_LABEL="Shadowsocks 2022"
@@ -1206,91 +1164,105 @@ get_enabled() {
     fi
 }
 
-# 显示节点运行摘要（启动/重启后调用）
+# 启动结果不等于客户端连通性，不能用旧配置快照推断节点已运行。
 _show_node_summary() {
-    NODES_DIR="${INSTALL_DIR}/nodes"
-    echo ""
-    local CUR_NODE_ID
-    CUR_NODE_ID=$(grep "^node_id=" "${CONFIG_FILE}" 2>/dev/null | head -1 | cut -d= -f2-)
-    local GLOBAL_TYPE
-    GLOBAL_TYPE=$(grep "^server_type=" "${CONFIG_FILE}" 2>/dev/null | head -1 | cut -d= -f2-)
-    local NODE_FILES=""
-    if [ -d "${NODES_DIR}" ]; then
-        NODE_FILES=$(ls "${NODES_DIR}"/node_*.conf 2>/dev/null)
+    _show_node_status
+}
+
+_node_process_identity() {
+    local pid="$1" boot ticks
+    [ -r "/proc/${pid}/stat" ] || return 1
+    boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || return 1
+    ticks=$(sed 's/^.*) //' "/proc/${pid}/stat" 2>/dev/null | awk '{print $20}')
+    case "${ticks}" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s:%s\n' "${boot}" "${ticks}"
+}
+
+# Validate a single atomic snapshot against the current service process, so a
+# previous run, reused PID, or another instance cannot supply a green status.
+_node_runtime_snapshot() {
+    _runtime_record_for_current_process "${INSTALL_DIR}/.runtime/nodes.status"
+}
+
+# Print a .runtime record only if its first line (process|PID|identity) matches
+# the running service process.
+_runtime_record_for_current_process() {
+    local snapshot kind pid identity extra service_pid current_identity
+    service_is_active || return 1
+    snapshot=$(cat "$1" 2>/dev/null) || return 1
+    IFS='|' read -r kind pid identity extra <<< "${snapshot}"
+    [ "${kind}" = process ] && [ -n "${identity}" ] && [ -z "${extra}" ] || return 1
+    case "${pid}" in ''|*[!0-9]*|0) return 1 ;; esac
+    service_pid=$(systemctl show -p MainPID --value "${SERVICE_NAME}" 2>/dev/null)
+    if [ -z "${service_pid}" ] && [ "${SERVICE_MANAGER}" != "openrc" ]; then
+        # systemd older than 230 does not support --value.
+        service_pid=$(command systemctl show -p MainPID "${SERVICE_NAME}" 2>/dev/null | sed -n 's/^MainPID=//p')
     fi
+    [ -n "${service_pid}" ] && [ "${pid}" = "${service_pid}" ] || return 1
+    current_identity=$(_node_process_identity "${pid}") || return 1
+    [ "${identity}" = "${current_identity}" ] || return 1
+    printf '%s\n' "${snapshot}"
+}
 
-    local RUNNING_NODE_IDS=","
-    for nf in ${NODE_FILES}; do
-        NID=$(grep "^node_id=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-        [ -z "${NID}" ] && continue
-        NTYPE=$(grep "^server_type=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-        NPORT=$(grep "^listen_port=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-        NPP=$(grep "^proxy_protocol=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-        DETAIL=""
-        case "${NTYPE}" in
-            ss)     DETAIL=$(grep "^ss_method=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2) ;;
-            vmess)  DETAIL=$(grep "^vmess_transport=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2) ;;
-            anytls) DETAIL=$(grep "^anytls_sni=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2) ;;
-            vless)  DETAIL=$(grep "^vless_transport=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    VFLOW=$(grep "^vless_flow=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    [ -n "${VFLOW}" ] && DETAIL="${DETAIL},flow=${VFLOW}"
-                    VREAL=$(grep "^vless_reality=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    [ "${VREAL}" = "true" ] && DETAIL="${DETAIL},reality"
-                    ;;
-            ssr)    DETAIL=$(grep "^ssr_protocol=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    OBFS=$(grep "^ssr_obfs=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    [ -n "${OBFS}" ] && DETAIL="${DETAIL},obfs=${OBFS}"
-                    ;;
-            trojan) DETAIL=$(grep "^trojan_transport=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    [ -z "${DETAIL}" ] && DETAIL="tcp"
-                    ;;
-            hysteria) HOBFS=$(grep "^hysteria_obfs_type=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    HUP=$(grep "^hysteria_up_mbps=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    HDOWN=$(grep "^hysteria_down_mbps=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    DETAIL=""
-                    [ -n "${HOBFS}" ] && [ "${HOBFS}" != "plain" ] && DETAIL="obfs=${HOBFS}"
-                    [ -n "${HUP}" ] && DETAIL="${DETAIL:+${DETAIL},}up=${HUP}Mbps"
-                    [ -n "${HDOWN}" ] && DETAIL="${DETAIL:+${DETAIL},}down=${HDOWN}Mbps"
-                    ;;
-            tuic)   TCC=$(grep "^tuic_congestion_control=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    TSNI=$(grep "^tuic_server_name=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    DETAIL=""
-                    [ -n "${TCC}" ] && DETAIL="congestion=${TCC}"
-                    [ -n "${TSNI}" ] && DETAIL="${DETAIL:+${DETAIL},}sni=${TSNI}"
-                    ;;
-            naive)  NTLS=$(grep "^naive_enable_tls=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    NSNI=$(grep "^naive_server_name=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    DETAIL=""
-                    [ "${NTLS}" = "true" ] && DETAIL="tls"
-                    [ -n "${NSNI}" ] && DETAIL="${DETAIL:+${DETAIL},}sni=${NSNI}"
-                    ;;
-            mieru)  MTRANS=$(grep "^mieru_transport=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    DETAIL="transport=${MTRANS}"
-                    ;;
-        esac
-        PP_STR=""
-        [ "${NPP}" = "true" ] && PP_STR=" PP=ON"
-        RUNNING_NODE_IDS="${RUNNING_NODE_IDS}${NID},"
-        echo -e "  Node ${NID}: ${GREEN}${NTYPE}${NC} | port=${NPORT} | ${DETAIL}${PP_STR}"
+_show_node_status() {
+    local configured snapshot valid=false active=false ids id nf seen="," row state proto port mark detail
+    configured=$(_cert_node_ids | paste -sd, -)
+    service_is_active && active=true
+    if snapshot=$(_node_runtime_snapshot); then valid=true; fi
+    printf '主配置文件启用节点: %s\n' "${configured:-无}"
+    echo '节点状态以当前进程启动结果为准；已启动不代表客户端连接已验证。'
+    ids="${configured//,/ }"
+    if ${valid}; then
+        ids="${ids} $(printf '%s\n' "${snapshot}" | awk -F'|' '$1 == "node" {print $2}')"
+    fi
+    for nf in "${INSTALL_DIR}"/nodes/node_*.conf; do
+        [ -f "${nf}" ] || continue
+        id="${nf##*/node_}"
+        ids="${ids} ${id%.conf}"
     done
-
-    IFS=',' read -ra CONFIGURED_IDS <<< "${CUR_NODE_ID}"
-    for cid in "${CONFIGURED_IDS[@]}"; do
-        cid=$(echo "${cid}" | xargs)
-        [ -z "${cid}" ] && continue
-        case "${RUNNING_NODE_IDS}" in
-            *,"${cid}",*) continue ;;
-        esac
-        local CONF_FILE="${INSTALL_DIR}/nodes/node_${cid}.conf"
-        local PENDING_TYPE="${GLOBAL_TYPE}"
-        if [ -f "${CONF_FILE}" ]; then
-            local PRE_TYPE
-            PRE_TYPE=$(grep "^server_type=" "${CONF_FILE}" 2>/dev/null | head -1 | cut -d= -f2-)
-            [ -z "${PRE_TYPE}" ] && PRE_TYPE=$(grep "^server_type_hint=" "${CONF_FILE}" 2>/dev/null | head -1 | cut -d= -f2-)
-            [ -n "${PRE_TYPE}" ] && PENDING_TYPE="${PRE_TYPE}"
+    for id in ${ids}; do
+        case "${id}" in ''|*[!0-9]*) continue ;; esac
+        case "${seen}" in *,"${id}",*) continue ;; esac
+        seen="${seen}${id},"
+        state=""; proto=""; port=""; detail=""
+        if ${valid}; then
+            row=$(printf '%s\n' "${snapshot}" | awk -F'|' -v id="${id}" '$1 == "node" && $2 == id { print; exit }')
+            IFS='|' read -r _ _ state proto port <<< "${row}"
         fi
-        echo -e "  Node ${cid}: ${YELLOW}${PENDING_TYPE}${NC} | ${YELLOW}运行配置未就绪${NC}"
+        case "${state}" in
+            running) mark='[已启动]' ;;
+            failed) mark='[启动失败，请查看日志]' ;;
+            starting) mark='[启动中]' ;;
+            pending) mark='[等待启动]' ;;
+            stopping) mark='[停止中]' ;;
+            stopped) mark='[已停止]' ;;
+            *)
+                if ! ${active}; then mark='[服务未运行]'
+                elif ${valid}; then mark='[未加载，需重启]'
+                else mark='[状态未核验，请查看日志]'; fi
+                ;;
+        esac
+        case ",${configured}," in
+            *,"${id}",*) ;;
+            *)
+                case "${state}" in
+                    running|starting|pending|stopping) mark="${mark} [主配置未启用；若刚移除需重启]" ;;
+                    *)
+                        if ${active} && ! ${valid}; then mark="${mark} [配置未启用]"
+                        else mark='[未启用，配置保留]'; fi
+                        ;;
+                esac
+                ;;
+        esac
+        if [ -n "${proto}" ]; then
+            detail="${proto} | port=${port}"
+        fi
+        printf '  Node %s: %s %s\n' "${id}" "${mark}" "${detail}"
     done
+    if ${active} && ! ${valid}; then
+        echo "未取得与当前服务进程匹配的启动记录；旧版内核也会出现此提示。查看: $(context_command "log")"
+    fi
+    echo "修改配置需重启所属实例: $(context_command "restart")（影响该实例所有节点）"
 }
 
 do_start() {
@@ -1307,7 +1279,7 @@ do_start() {
     systemctl start ${SERVICE_NAME}
     sleep 2
     if systemctl is-active --quiet ${SERVICE_NAME}; then
-        echo -e "${GREEN}$(service_label) 启动成功${NC}"
+        echo -e "${GREEN}$(service_label) 服务进程已启动；各节点结果如下${NC}"
         _show_node_summary
     else
         echo -e "${RED}Heki 启动失败，请查看日志: $(context_command "log")${NC}"
@@ -1361,7 +1333,7 @@ do_restart() {
     fi
     sleep 2
     if systemctl is-active --quiet ${SERVICE_NAME}; then
-        echo -e "${GREEN}$(service_label) 重启成功${NC}"
+        echo -e "${GREEN}$(service_label) 服务进程已重启；各节点结果如下${NC}"
         _show_node_summary
     else
         echo -e "${RED}Heki 重启失败，请查看日志: $(context_command "log")${NC}"
@@ -1387,21 +1359,19 @@ do_log() {
     if [ -d "${NODES_DIR}" ]; then
         for nf in "${NODES_DIR}"/node_*.conf; do
             [ -f "${nf}" ] || continue
-            NID=$(grep "^node_id=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-            NTYPE=$(grep "^server_type=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-            [ -n "${NID}" ] && NODE_IDS+=("${NID}:${NTYPE}")
+            NID="${nf##*/node_}"
+            NID="${NID%.conf}"
+            [[ "${NID}" =~ ^[0-9]+$ ]] && NODE_IDS+=("${NID}")
         done
     fi
 
     if [ ${#NODE_IDS[@]} -gt 1 ]; then
         echo ""
-        echo -e "${CYAN}检测到多节点，选择查看方式:${NC}"
+        echo -e "${CYAN}按节点 ID 查看日志（包含保留配置的历史节点）:${NC}"
         echo -e "  ${GREEN}0.${NC} 全部日志"
         local idx=1
         for entry in "${NODE_IDS[@]}"; do
-            local nid="${entry%%:*}"
-            local ntype="${entry##*:}"
-            echo -e "  ${GREEN}${idx}.${NC} Node ${nid} (${ntype})"
+            echo -e "  ${GREEN}${idx}.${NC} Node ${entry}"
             idx=$((idx + 1))
         done
         echo ""
@@ -1410,9 +1380,8 @@ do_log() {
 
         if [ "${LOG_CHOICE}" != "0" ] && [ "${LOG_CHOICE}" -ge 1 ] 2>/dev/null && [ "${LOG_CHOICE}" -le ${#NODE_IDS[@]} ]; then
             local selected="${NODE_IDS[$((LOG_CHOICE - 1))]}"
-            local sel_nid="${selected%%:*}"
-            local sel_type="${selected##*:}"
-            echo -e "${CYAN}过滤 Node ${sel_nid} (${sel_type}) 的日志:${NC}"
+            local sel_nid="${selected}"
+            echo -e "${CYAN}过滤 Node ${sel_nid} 的日志:${NC}"
             echo ""
             journalctl -u ${SERVICE_NAME} --no-pager -n 200 | grep -E "\[Node ${sel_nid}\]|AnyTLS|VMess|VLESS|SS " | grep -v "^\s*$" | tail -100
             echo ""
@@ -1450,104 +1419,8 @@ do_status() {
             print_process_runtime_summary "${PID}"
         fi
 
-        # 显示节点运行配置（从自动生成的节点配置文件读取）
-        NODES_DIR="${INSTALL_DIR}/nodes"
-        if [ -d "${NODES_DIR}" ]; then
-            NODE_FILES=$(ls "${NODES_DIR}"/node_*.conf 2>/dev/null)
-            if [ -n "${NODE_FILES}" ]; then
-                echo ""
-                echo -e "${CYAN}节点运行信息:${NC}"
-                echo "----------------------------------------"
-                for nf in ${NODE_FILES}; do
-                    NID=$(grep "^node_id=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    NTYPE=$(grep "^server_type=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    NPORT=$(grep "^listen_port=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    NPP=$(grep "^proxy_protocol=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                    NRATE=$(grep "^traffic_rate=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-
-                    # 协议详情
-                    DETAIL=""
-                    case "${NTYPE}" in
-                        ss)
-                            METHOD=$(grep "^ss_method=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            IS2022=$(grep "^ss_is_2022=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            DETAIL="method=${METHOD}"
-                            [ "${IS2022}" = "true" ] && DETAIL="${DETAIL} (SS2022)"
-                            ;;
-                        vmess)
-                            TRANS=$(grep "^vmess_transport=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            TLS=$(grep "^vmess_enable_tls=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            DETAIL="transport=${TRANS}"
-                            [ "${TLS}" = "true" ] && DETAIL="${DETAIL}+tls"
-                            ;;
-                        anytls)
-                            SNI=$(grep "^anytls_sni=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            DETAIL="sni=${SNI}"
-                            ;;
-                        vless)
-                            TRANS=$(grep "^vless_transport=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            FLOW=$(grep "^vless_flow=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            TLS=$(grep "^vless_enable_tls=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            REAL=$(grep "^vless_reality=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            DETAIL="transport=${TRANS}"
-                            [ -n "${FLOW}" ] && DETAIL="${DETAIL}, flow=${FLOW}"
-                            if [ "${REAL}" = "true" ]; then
-                                DETAIL="${DETAIL}+reality"
-                            elif [ "${TLS}" = "true" ]; then
-                                DETAIL="${DETAIL}+tls"
-                            fi
-                            ;;
-                        ssr)
-                            METHOD=$(grep "^ssr_method=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            PROTO=$(grep "^ssr_protocol=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            OBFS=$(grep "^ssr_obfs=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            DETAIL="method=${METHOD}, protocol=${PROTO}, obfs=${OBFS}"
-                            ;;
-                        trojan)
-                            TRANS=$(grep "^trojan_transport=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            TLS=$(grep "^trojan_enable_tls=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            DETAIL="transport=${TRANS:-tcp}"
-                            [ "${TLS}" = "true" ] && DETAIL="${DETAIL}+tls"
-                            ;;
-                        hysteria)
-                            HOBFS=$(grep "^hysteria_obfs_type=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            HUP=$(grep "^hysteria_up_mbps=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            HDOWN=$(grep "^hysteria_down_mbps=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            DETAIL=""
-                            [ -n "${HOBFS}" ] && [ "${HOBFS}" != "plain" ] && DETAIL="obfs=${HOBFS}"
-                            [ -n "${HUP}" ] && DETAIL="${DETAIL:+${DETAIL}, }up=${HUP}Mbps"
-                            [ -n "${HDOWN}" ] && DETAIL="${DETAIL:+${DETAIL}, }down=${HDOWN}Mbps"
-                            ;;
-                        tuic)
-                            TCC=$(grep "^tuic_congestion_control=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            TSNI=$(grep "^tuic_server_name=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            DETAIL=""
-                            [ -n "${TCC}" ] && DETAIL="congestion=${TCC}"
-                            [ -n "${TSNI}" ] && DETAIL="${DETAIL:+${DETAIL}, }sni=${TSNI}"
-                            ;;
-                        naive)
-                            NTLS=$(grep "^naive_enable_tls=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            NSNI=$(grep "^naive_server_name=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            DETAIL=""
-                            [ "${NTLS}" = "true" ] && DETAIL="tls"
-                            [ -n "${NSNI}" ] && DETAIL="${DETAIL:+${DETAIL}, }sni=${NSNI}"
-                            ;;
-                        mieru)
-                            MTRANS=$(grep "^mieru_transport=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                            DETAIL="transport=${MTRANS}"
-                            ;;
-                    esac
-
-                    PP_STR=""
-                    [ "${NPP}" = "true" ] && PP_STR=" ${GREEN}PP=ON${NC}"
-
-                    echo -e "  Node ${NID}: ${GREEN}${NTYPE}${NC} | port=${NPORT} | ${DETAIL} | rate=${NRATE}${PP_STR}"
-                done
-                echo "----------------------------------------"
-                echo -e "  节点配置目录: ${CYAN}${NODES_DIR}/${NC}"
-            fi
-        fi
     fi
+    _show_node_status
 }
 
 # 判断值是否为纯数字或布尔值（不需要引号）
@@ -1561,39 +1434,131 @@ is_plain_value() {
     esac
 }
 
-do_config() {
-    if [ $# -eq 0 ]; then
-        if [ -f "${CONFIG_FILE}" ]; then
-            echo -e "${CYAN}当前配置文件内容 (${CONFIG_FILE}):${NC}"
-            echo "----------------------------------------"
-            cat "${CONFIG_FILE}"
-        else
-            echo -e "${RED}配置文件不存在: ${CONFIG_FILE}${NC}"
+# Show, per node, the value each node-level parameter resolved to at the last
+# successful start of the current process, and which layer supplied it.
+_show_effective_node_config() {
+    local ids id record kind key source value generated shown=false
+    ids=$(_cert_node_ids | tr '\n' ' ')
+    echo -e "${CYAN}节点参数最终值及来源（本次启动时解析）:${NC}"
+    echo '来源: default=内置默认值  heki.conf=主配置  env=环境变量  node=节点 [USER]  panel/auto=面板下发或自动解析'
+    echo '仅列出可在节点 [USER] 区覆盖的参数及协议、端口；凭据显示为 <hidden>。'
+    for id in ${ids}; do
+        case "${id}" in ''|*[!0-9]*) continue ;; esac
+        echo "----------------------------------------"
+        if ! record=$(_runtime_record_for_current_process "${INSTALL_DIR}/.runtime/nodes/node_${id}.effective"); then
+            echo "Node ${id}: 没有与当前服务进程匹配的记录（节点未成功启动、服务未运行或内核版本较旧）"
+            continue
         fi
+        shown=true
+        generated=$(printf '%s\n' "${record}" | awk -F'|' '$1 == "generated" { print $2; exit }')
+        echo "Node ${id}（记录时间 ${generated:-未知}）:"
+        while IFS='|' read -r kind key source value; do
+            [ "${kind}" = value ] || continue
+            printf '  %-40s [%s] %s\n' "${key}" "${source}" "${value}"
+        done <<< "${record}"
+    done
+    echo "----------------------------------------"
+    if ! ${shown}; then
+        echo "查看启动日志: $(context_command "log")"
+    fi
+    echo "修改配置需重启所属实例: $(context_command "restart")（影响该实例所有节点）"
+}
+
+do_config() {
+    if [ $# -eq 1 ] && [ "$1" = "--effective" ]; then
+        _show_effective_node_config
+        return
+    fi
+    if [ $# -eq 0 ] || { [ $# -eq 1 ] && [ "$1" = "--raw" ]; }; then
+        if [ ! -f "${CONFIG_FILE}" ]; then
+            echo -e "${RED}配置文件不存在: ${CONFIG_FILE}${NC}"
+            return 1
+        fi
+        if [ "${1:-}" = "--raw" ]; then
+            cat "${CONFIG_FILE}"
+            return
+        fi
+        echo -e "${CYAN}主配置默认值摘要 (${CONFIG_FILE}):${NC}"
+        echo '以下仅列文件中的默认值；同名环境变量、节点 [USER] 和面板字段还会参与配置。'
+        echo '协议以各节点本次启动结果为准；面板协议选择/探测参数仅在原文和高级修改中显示。'
+        echo -e "完整文件: $(context_command "config --raw")（摘要不可用作配置文件）"
+        echo -e "各节点最终值及来源: $(context_command "config --effective")"
+        echo "----------------------------------------"
+        awk '
+            /^[[:space:]]*(#|$)/ { next }
+            {
+                line = $0
+                sub(/^[[:space:]]+/, "", line)
+                pos = index(line, "=")
+                name = substr(line, 1, pos - 1)
+                sub(/[[:space:]]+$/, "", name)
+                if (pos > 0 && name != "server_type") print
+            }
+        ' "${CONFIG_FILE}"
+        echo ""
+        _show_node_status
         return
     fi
 
     check_root
-
+    local arg key value tmp
+    # Validate the whole request before writing any key.
     for arg in "$@"; do
-        KEY="${arg%%=*}"
-        VALUE="${arg#*=}"
-
-        if [ -z "${KEY}" ] || [ "${KEY}" = "${arg}" ]; then
-            echo -e "${RED}无效参数: ${arg}，格式应为 key=value${NC}"
-            continue
-        fi
-
-        if grep -q "^${KEY}=" "${CONFIG_FILE}" 2>/dev/null; then
-            sed -i "s|^${KEY}=.*|${KEY}=${VALUE}|" "${CONFIG_FILE}"
-            echo -e "${GREEN}已更新: ${KEY} = ${VALUE}${NC}"
-        else
-            echo "${KEY}=${VALUE}" >> "${CONFIG_FILE}"
-            echo -e "${GREEN}已添加: ${KEY} = ${VALUE}${NC}"
+        key="${arg%%=*}"
+        value="${arg#*=}"
+        if [ "${key}" = "${arg}" ] || ! [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
+            echo -e "${RED}参数格式无效；使用单行 key=value，未修改配置${NC}"
+            return 1
         fi
     done
-    echo ""
-    echo -e "${YELLOW}配置已修改，如需生效请重启: $(context_command "restart")${NC}"
+    if [ ! -f "${CONFIG_FILE}" ]; then
+        echo -e "${RED}配置文件不存在，请先运行: $(context_command "setup")${NC}"
+        return 1
+    fi
+
+    # cp -p keeps the mode and owner of heki.conf on the replacement file;
+    # mktemp alone would silently turn it into 0600.
+    tmp=$(mktemp "${CONFIG_FILE}.tmp.XXXXXX") || return 1
+    cp -p "${CONFIG_FILE}" "${tmp}" || { rm -f "${tmp}"; return 1; }
+    for arg in "$@"; do
+        key="${arg%%=*}"
+        value="${arg#*=}"
+        # ENVIRON preserves literal &, |, backslashes and dollar signs; awk -v
+        # or a sed replacement would interpret some of them.
+        local next
+        next=$(mktemp "${CONFIG_FILE}.tmp.XXXXXX") || { rm -f "${tmp}"; return 1; }
+        cp -p "${CONFIG_FILE}" "${next}" || { rm -f "${tmp}" "${next}"; return 1; }
+        if ! HEKI_CONFIG_EDIT_KEY="${key}" HEKI_CONFIG_EDIT_VALUE="${value}" awk '
+            BEGIN { key = ENVIRON["HEKI_CONFIG_EDIT_KEY"]; value = ENVIRON["HEKI_CONFIG_EDIT_VALUE"]; seen = 0 }
+            {
+                line = $0
+                sub(/^[[:space:]]+/, "", line)
+                pos = index(line, "=")
+                name = substr(line, 1, pos - 1)
+                sub(/[[:space:]]+$/, "", name)
+                if (pos > 0 && name == key) {
+                    if (!seen++) print key "=" value
+                    next
+                }
+                print
+            }
+            END { if (!seen) print key "=" value }
+        ' "${tmp}" > "${next}"; then
+            rm -f "${tmp}" "${next}"
+            echo -e "${RED}写入失败，原配置未修改${NC}"
+            return 1
+        fi
+        rm -f "${tmp}"
+        tmp="${next}"
+    done
+    if ! mv "${tmp}" "${CONFIG_FILE}"; then
+        rm -f "${tmp}"
+        echo -e "${RED}替换配置失败，请检查文件权限或挂载方式${NC}"
+        return 1
+    fi
+    echo -e "${GREEN}已写入主配置文件: ${CONFIG_FILE}${NC}"
+    echo '本次仅写入文件，尚未校验或应用；同名环境变量可能覆盖它，节点 [USER] 和面板也会参与配置。'
+    echo -e "${YELLOW}应用修改需重启: $(context_command "restart")（影响本实例所有节点）${NC}"
 }
 
 do_update() {
@@ -1718,8 +1683,9 @@ do_setup() {
     esac
     echo ""
 
-    # 后端类型选择
-    echo -e "${CYAN}后端类型:${NC}"
+    # 面板协议选择/探测提示
+    echo -e "${CYAN}面板协议选择/探测提示（server_type）:${NC}"
+    echo "各节点的实际协议由面板解析；PPanel 多协议节点会用此项选择协议。"
     echo -e "  ${GREEN}1.${NC} v2ray / vmess（默认）"
     echo -e "  ${GREEN}2.${NC} vless"
     echo -e "  ${GREEN}3.${NC} ss (Shadowsocks)"
@@ -1731,7 +1697,7 @@ do_setup() {
     echo -e "  ${GREEN}9.${NC} mieru"
     echo -e "  ${GREEN}10.${NC} tuic (TUIC V5)"
     echo ""
-    read -p "选择后端类型 [1]: " S_SERVER_TYPE_CHOICE
+    read -p "选择提示协议 [1]: " S_SERVER_TYPE_CHOICE
     S_SERVER_TYPE_CHOICE=${S_SERVER_TYPE_CHOICE:-1}
     case ${S_SERVER_TYPE_CHOICE} in
         2) S_SERVER_TYPE="vless" ;;
@@ -1800,7 +1766,8 @@ do_setup() {
     cat > "${CONFIG_FILE}" << CFGEOF
 # Heki 配置文件
 # 监听端口、加密方式等从面板自动获取
-# server_type 为默认协议类型和启动探测提示
+# server_type 用于面板协议选择/启动探测，不代表各节点当前协议
+# PPanel 多协议节点会用它选择协议，保留此项以兼容现有配置
 # 混合协议节点会在启动时按面板配置自动识别，无需在 node_xxx.conf 中单独填写 server_type
 type=${S_PANEL_TYPE}
 server_type=${S_SERVER_TYPE}
@@ -2024,7 +1991,7 @@ CERTEOF
     echo -e "${GREEN}配置完成: ${CONFIG_FILE}${NC}"
     echo ""
     echo -e "  面板类型: ${GREEN}${S_PANEL_TYPE}${NC}"
-    echo -e "  后端类型: ${GREEN}${S_SERVER_TYPE}${NC}"
+    echo -e "  面板协议选择/探测提示: ${GREEN}${S_SERVER_TYPE}${NC}"
     echo -e "  面板地址: ${GREEN}${S_PANEL_URL}${NC}"
     echo -e "  节点 ID:  ${GREEN}${S_NODE_ID}${NC}"
     if [ -n "${S_LICENSE_KEY}" ]; then
@@ -2065,9 +2032,7 @@ do_modify() {
     echo -e "${CYAN}       Heki 修改配置                 ${NC}"
     echo -e "${CYAN}========================================${NC}"
     echo ""
-    echo -e "${GREEN}当前配置:${NC}"
-    echo "----------------------------------------"
-    cat "${CONFIG_FILE}"
+    do_config
     echo "----------------------------------------"
     echo ""
     echo -e "${CYAN}可修改项（直接回车跳过不修改）:${NC}"
@@ -2111,38 +2076,42 @@ do_modify() {
         echo -e "${GREEN}  已更新 panel_url${NC}"
     fi
 
-    # 后端类型（必填）
-    CUR_SERVER_TYPE=$(grep "^server_type=" "${CONFIG_FILE}" 2>/dev/null | head -1 | cut -d= -f2-)
-    if [ -z "${CUR_SERVER_TYPE}" ]; then CUR_SERVER_TYPE="未设置"; fi
-    echo -e "  后端类型: ${CUR_SERVER_TYPE} (1=v2ray 2=vless 3=ss 4=ssr 5=trojan 6=hysteria 7=anytls 8=naive 9=mieru 10=tuic)"
-    read -p "后端类型 [直接回车跳过]: " NEW_SERVER_TYPE_CHOICE
-    if [ -n "${NEW_SERVER_TYPE_CHOICE}" ]; then
-        case ${NEW_SERVER_TYPE_CHOICE} in
-            1) NEW_SERVER_TYPE="v2ray" ;;
-            2) NEW_SERVER_TYPE="vless" ;;
-            3) NEW_SERVER_TYPE="ss" ;;
-            4) NEW_SERVER_TYPE="ssr" ;;
-            5) NEW_SERVER_TYPE="trojan" ;;
-            6) NEW_SERVER_TYPE="hysteria" ;;
-            7) NEW_SERVER_TYPE="anytls" ;;
-            8) NEW_SERVER_TYPE="naive" ;;
-            9) NEW_SERVER_TYPE="mieru" ;;
-            10) NEW_SERVER_TYPE="tuic" ;;
-            vmess|v2ray|vless|ss|ssr|trojan|hysteria|tuic|anytls|naive|mieru) NEW_SERVER_TYPE="${NEW_SERVER_TYPE_CHOICE}" ;;
-            *) echo -e "${RED}无效选项，跳过${NC}"; NEW_SERVER_TYPE="" ;;
-        esac
-        if [ -n "${NEW_SERVER_TYPE}" ]; then
-            if grep -q "^server_type=" "${CONFIG_FILE}" 2>/dev/null; then
-                sed -i "s|^server_type=.*|server_type=${NEW_SERVER_TYPE}|" "${CONFIG_FILE}"
-            else
-                sed -i "/^type=/a server_type=${NEW_SERVER_TYPE}" "${CONFIG_FILE}"
-            fi
-            echo -e "${GREEN}  已更新 server_type = ${NEW_SERVER_TYPE}${NC}"
-            # ppanel 不支持 SSR 提示
-            local CHECK_PANEL_TYPE
-            CHECK_PANEL_TYPE=$(grep "^type=" "${CONFIG_FILE}" 2>/dev/null | head -1 | cut -d= -f2-)
-            if [ "${CHECK_PANEL_TYPE}" = "ppanel" ] && [ "${NEW_SERVER_TYPE}" = "ssr" ]; then
-                echo -e "${YELLOW}  注意: ppanel 不支持 SSR 协议，请确认协议类型${NC}"
+    local EDIT_PROTOCOL_HINT
+    read -p "修改高级面板协议选择/探测参数？[y/N]: " EDIT_PROTOCOL_HINT
+    if [[ "${EDIT_PROTOCOL_HINT}" =~ ^[Yy]$ ]]; then
+        echo '此参数不代表当前各节点协议；PPanel 多协议节点会用它选择协议。'
+        CUR_SERVER_TYPE=$(grep "^server_type=" "${CONFIG_FILE}" 2>/dev/null | head -1 | cut -d= -f2-)
+        if [ -z "${CUR_SERVER_TYPE}" ]; then CUR_SERVER_TYPE="未设置"; fi
+        echo -e "  面板协议选择/探测提示: ${CUR_SERVER_TYPE} (1=v2ray 2=vless 3=ss 4=ssr 5=trojan 6=hysteria 7=anytls 8=naive 9=mieru 10=tuic)"
+        read -p "选择提示协议 [直接回车跳过]: " NEW_SERVER_TYPE_CHOICE
+        if [ -n "${NEW_SERVER_TYPE_CHOICE}" ]; then
+            case ${NEW_SERVER_TYPE_CHOICE} in
+                1) NEW_SERVER_TYPE="v2ray" ;;
+                2) NEW_SERVER_TYPE="vless" ;;
+                3) NEW_SERVER_TYPE="ss" ;;
+                4) NEW_SERVER_TYPE="ssr" ;;
+                5) NEW_SERVER_TYPE="trojan" ;;
+                6) NEW_SERVER_TYPE="hysteria" ;;
+                7) NEW_SERVER_TYPE="anytls" ;;
+                8) NEW_SERVER_TYPE="naive" ;;
+                9) NEW_SERVER_TYPE="mieru" ;;
+                10) NEW_SERVER_TYPE="tuic" ;;
+                vmess|v2ray|vless|ss|ssr|trojan|hysteria|tuic|anytls|naive|mieru) NEW_SERVER_TYPE="${NEW_SERVER_TYPE_CHOICE}" ;;
+                *) echo -e "${RED}无效选项，跳过${NC}"; NEW_SERVER_TYPE="" ;;
+            esac
+            if [ -n "${NEW_SERVER_TYPE}" ]; then
+                if grep -q "^server_type=" "${CONFIG_FILE}" 2>/dev/null; then
+                    sed -i "s|^server_type=.*|server_type=${NEW_SERVER_TYPE}|" "${CONFIG_FILE}"
+                else
+                    sed -i "/^type=/a server_type=${NEW_SERVER_TYPE}" "${CONFIG_FILE}"
+                fi
+                echo -e "${GREEN}  已更新 server_type = ${NEW_SERVER_TYPE}${NC}"
+                # ppanel 不支持 SSR 提示
+                local CHECK_PANEL_TYPE
+                CHECK_PANEL_TYPE=$(grep "^type=" "${CONFIG_FILE}" 2>/dev/null | head -1 | cut -d= -f2-)
+                if [ "${CHECK_PANEL_TYPE}" = "ppanel" ] && [ "${NEW_SERVER_TYPE}" = "ssr" ]; then
+                    echo -e "${YELLOW}  注意: ppanel 不支持 SSR 协议，请确认协议类型${NC}"
+                fi
             fi
         fi
     fi
@@ -2732,12 +2701,12 @@ _ask_restart() {
 _cert_config_value() {
     local FILE="$1" KEY="$2" USER_ONLY="${3:-false}"
     [ -f "${FILE}" ] || return 0
-    awk -v key="${KEY}" -v user_only="${USER_ONLY}" -v marker="${NODE_USER_SECTION_MARKER}" '
+    awk -v key="${KEY}" -v user_only="${USER_ONLY}" -v marker="${NODE_USER_SECTION_PATTERN}" '
         BEGIN { active = (user_only != "true") }
         {
             line = $0
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-            if (line == marker) { active = 1; next }
+            if (line ~ marker) { active = 1; next }
             if (!active || line ~ /^#/) next
             pos = index(line, "=")
             name = substr(line, 1, pos - 1)
@@ -2764,7 +2733,7 @@ _show_manual_certificates_in_file() {
     local FILE="$1" LABEL="$2" USER_ONLY="$3" DETAILS="$4"
     local PREFIX CERT_PATH KEY_PATH ISSUER EXPIRY DAYS
     local PREFIXES=("" anytls_ vmess_ vless_ hysteria_ tuic_ naive_)
-    # 节点 [AUTO] 区的协议证书是上次运行快照，不作为手动配置展示。
+    # 独立启动快照及旧节点 [AUTO] 区不作为手动证书配置展示。
     [ "${USER_ONLY}" = true ] && PREFIXES=("")
     for PREFIX in "${PREFIXES[@]}"; do
         CERT_PATH=$(_cert_config_value "${FILE}" "${PREFIX}cert_file" "${USER_ONLY}")
@@ -2795,16 +2764,16 @@ _show_manual_certificates() {
     done < <(_cert_node_ids)
 }
 
-# 成对写入，节点只更新 [USER] 区，保留其余配置及 [AUTO] 快照。
+# 成对写入，节点只更新 [USER] 区，兼容保留旧文件中的 [AUTO]。
 _write_manual_cert_config() {
     local FILE="$1" USER_ONLY="$2" CERT_PATH="$3" KEY_PATH="$4" TMP_FILE
     TMP_FILE=$(mktemp "${FILE}.tmp.XXXXXX") || return 1
-    if ! awk -v user_only="${USER_ONLY}" -v marker="${NODE_USER_SECTION_MARKER}" '
+    if ! awk -v user_only="${USER_ONLY}" -v marker="${NODE_USER_SECTION_PATTERN}" '
         BEGIN { active = (user_only != "true") }
         {
             line = $0
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-            if (line == marker) active = 1
+            if (line ~ marker) active = 1
             if (active && (line ~ /^(cert_file|key_file|cert_domain|cert_mode|cert_key_length|acme_server|dns_provider)[[:space:]]*=/ || line ~ /^(DNS_|CF_)/)) next
             if (active && line ~ /^# (自动证书|TLS 证书（手动指定）)/) next
             print
@@ -2873,19 +2842,16 @@ do_cert() {
             echo -e "  当前: ${GREEN}自动申请 (${CUR_CERT_MODE})${NC} 域名=${CUR_CERT_DOMAIN}"
         else
             # 检查是否有从面板自动申请的证书（AnyTLS SNI 自动申请，配置文件里不会写 cert_domain）
-            NODES_DIR="${INSTALL_DIR}/nodes"
             AUTO_FOUND=false
-            if [ -d "${NODES_DIR}" ]; then
-                for nf in "${NODES_DIR}"/node_*.conf; do
-                    [ -f "$nf" ] || continue
-                    NSNI=$(grep "^anytls_sni=" "$nf" 2>/dev/null | head -1 | cut -d= -f2-)
-                    if [ -n "${NSNI}" ] && [ -f "/etc/heki/certs/${NSNI}/fullchain.pem" ]; then
-                        echo -e "  当前: ${GREEN}自动申请 (AnyTLS)${NC} 域名=${NSNI}"
-                        AUTO_FOUND=true
-                        break
-                    fi
-                done
-            fi
+            for nf in "${INSTALL_DIR}/.runtime/nodes"/node_*.conf "${INSTALL_DIR}/nodes"/node_*.conf; do
+                [ -f "$nf" ] || continue
+                NSNI=$(grep "^anytls_sni=" "$nf" 2>/dev/null | head -1 | cut -d= -f2-)
+                if [ -n "${NSNI}" ] && [ -f "/etc/heki/certs/${NSNI}/fullchain.pem" ]; then
+                    echo -e "  已保存证书: ${GREEN}AnyTLS${NC} 域名=${NSNI}（启动快照记录，请结合日志核对当前使用情况）"
+                    AUTO_FOUND=true
+                    break
+                fi
+            done
             if ! ${AUTO_FOUND}; then
                 echo -e "  当前: ${YELLOW}未配置证书${NC}"
             fi
@@ -3157,7 +3123,11 @@ do_node() {
             sed -i "s|^node_id=.*|node_id=${NEW_NODE_ID}|" "${CONFIG_FILE}"
             echo -e "${GREEN}已添加节点 ${TARGET_ID}，当前: node_id=${NEW_NODE_ID}${NC}"
             echo -e "${CYAN}节点协议将在下次启动时按面板配置自动识别，无需在 node_xxx.conf 的 [USER] 区手动填写 server_type${NC}"
-            _guide_new_node_setup "${TARGET_ID}"
+            if [ -f "$(_node_conf_path "${TARGET_ID}")" ]; then
+                echo -e "${CYAN}将继续使用已有节点配置: $(_node_conf_path "${TARGET_ID}")${NC}"
+            else
+                _guide_new_node_setup "${TARGET_ID}"
+            fi
 
             _ask_restart
             ;;
@@ -3193,143 +3163,13 @@ do_node() {
             NEW_NODE_ID=$(IFS=','; echo "${NEW_IDS[*]}")
             sed -i "s|^node_id=.*|node_id=${NEW_NODE_ID}|" "${CONFIG_FILE}"
 
-            # 删除节点配置文件
-            local NODE_CONF="${INSTALL_DIR}/nodes/node_${TARGET_ID}.conf"
-            if [ -f "${NODE_CONF}" ]; then
-                rm -f "${NODE_CONF}"
-                echo -e "${GREEN}已删除节点配置文件: ${NODE_CONF}${NC}"
-            fi
-
-            echo -e "${GREEN}已删除节点 ${TARGET_ID}，当前: node_id=${NEW_NODE_ID}${NC}"
-            echo -e "${YELLOW}注意: 必须重启服务才能生效！${NC}"
+            echo -e "${GREEN}已从启用列表移除节点 ${TARGET_ID}，当前: node_id=${NEW_NODE_ID}${NC}"
+            echo -e "${CYAN}节点配置已保留: $(_node_conf_path "${TARGET_ID}")；重新添加同一 ID 可继续使用${NC}"
+            echo -e "${YELLOW}当前进程尚未改变；执行 $(context_command "restart") 后生效，会影响本实例所有节点${NC}"
             _ask_restart
             ;;
         list|ls|"")
-            echo -e "${CYAN}当前节点配置: node_id=${CUR_NODE_ID}${NC}"
-            local SERVICE_ACTIVE=false
-            if service_is_active; then
-                SERVICE_ACTIVE=true
-            fi
-
-            # 解析配置中的节点ID列表
-            IFS=',' read -ra CONFIGURED_IDS <<< "${CUR_NODE_ID}"
-            local CONFIGURED_NODE_IDS=","
-            for cid in "${CONFIGURED_IDS[@]}"; do
-                cid=$(echo "${cid}" | xargs)
-                [ -z "${cid}" ] && continue
-                CONFIGURED_NODE_IDS="${CONFIGURED_NODE_IDS}${cid},"
-            done
-
-            # 显示运行中的节点详情
-            NODES_DIR="${INSTALL_DIR}/nodes"
-            if [ -d "${NODES_DIR}" ]; then
-                NODE_FILES=$(ls "${NODES_DIR}"/node_*.conf 2>/dev/null)
-                if [ -n "${NODE_FILES}" ]; then
-                    echo ""
-                    echo -e "${CYAN}节点详情:${NC}"
-                    local HAS_PENDING_RESTART=false
-                    local HAS_STALE_ORPHAN=false
-                    for nf in ${NODE_FILES}; do
-                        NID=$(grep "^node_id=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                        [ -z "${NID}" ] && continue
-                        NTYPE=$(grep "^server_type=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                        NPORT=$(grep "^listen_port=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-
-                        # 检查是否在配置中
-                        local STATUS_MARK=""
-                        case "${CONFIGURED_NODE_IDS}" in
-                            *,"${NID}",*) local NODE_CONFIGURED=true ;;
-                            *) local NODE_CONFIGURED=false ;;
-                        esac
-                        if ! ${NODE_CONFIGURED}; then
-                            if ${SERVICE_ACTIVE}; then
-                                STATUS_MARK="${RED}[已删除-待重启]${NC}"
-                                HAS_PENDING_RESTART=true
-                            else
-                                STATUS_MARK="${RED}[已删除-残留配置]${NC}"
-                                HAS_STALE_ORPHAN=true
-                            fi
-                        else
-                            if ${SERVICE_ACTIVE}; then
-                                STATUS_MARK="${GREEN}[运行中]${NC}"
-                            else
-                                STATUS_MARK="${RED}[未运行]${NC}"
-                            fi
-                        fi
-
-                        DETAIL=""
-                        case "${NTYPE}" in
-                            ss)     DETAIL=$(grep "^ss_method=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2) ;;
-                            vmess)  DETAIL=$(grep "^vmess_transport=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2) ;;
-                            anytls) DETAIL=$(grep "^anytls_sni=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2) ;;
-                            vless)
-                                DETAIL=$(grep "^vless_transport=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                                VFLOW=$(grep "^vless_flow=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                                [ -n "${VFLOW}" ] && DETAIL="${DETAIL},flow=${VFLOW}"
-                                ;;
-                            ssr)
-                                DETAIL=$(grep "^ssr_protocol=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                                OBFS=$(grep "^ssr_obfs=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                                [ -n "${OBFS}" ] && DETAIL="${DETAIL},obfs=${OBFS}"
-                                ;;
-                            trojan)
-                                DETAIL=$(grep "^trojan_transport=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                                [ -z "${DETAIL}" ] && DETAIL="tcp"
-                                ;;
-                            hysteria)
-                                HOBFS=$(grep "^hysteria_obfs_type=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                                DETAIL=""
-                                [ -n "${HOBFS}" ] && [ "${HOBFS}" != "plain" ] && DETAIL="obfs=${HOBFS}"
-                                ;;
-                            tuic)
-                                TCC=$(grep "^tuic_congestion_control=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                                TSNI=$(grep "^tuic_server_name=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                                DETAIL=""
-                                [ -n "${TCC}" ] && DETAIL="congestion=${TCC}"
-                                [ -n "${TSNI}" ] && DETAIL="${DETAIL:+${DETAIL},}sni=${TSNI}"
-                                ;;
-                            naive)
-                                NTLS=$(grep "^naive_enable_tls=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                                NSNI=$(grep "^naive_server_name=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                                DETAIL=""
-                                [ "${NTLS}" = "true" ] && DETAIL="tls"
-                                [ -n "${NSNI}" ] && DETAIL="${DETAIL:+${DETAIL},}sni=${NSNI}"
-                                ;;
-                            mieru)
-                                MTRANS=$(grep "^mieru_transport=" "${nf}" 2>/dev/null | head -1 | cut -d= -f2)
-                                DETAIL="transport=${MTRANS}"
-                                ;;
-                        esac
-                        echo -e "  Node ${NID}: ${GREEN}${NTYPE}${NC} | port=${NPORT} | ${DETAIL} ${STATUS_MARK}"
-                    done
-
-                    if ${HAS_PENDING_RESTART}; then
-                        echo ""
-                        echo -e "${YELLOW}提示: 发现已删除但未重启的节点，请执行 '$(context_command "restart")' 使配置生效${NC}"
-                    fi
-                    if ${HAS_STALE_ORPHAN}; then
-                        echo ""
-                        echo -e "${YELLOW}提示: 发现已删除节点的残留配置文件；服务下次成功启动时会自动清理${NC}"
-                    fi
-                fi
-            fi
-
-            # 显示已配置但尚未启动的节点（新添加的，还没有完整的 node_xxx.conf）
-            local GLOBAL_TYPE
-            GLOBAL_TYPE=$(grep "^server_type=" "${CONFIG_FILE}" 2>/dev/null | head -1 | cut -d= -f2-)
-            for cid in "${CONFIGURED_IDS[@]}"; do
-                cid=$(echo "${cid}" | xargs)
-                [ -z "${cid}" ] && continue
-                local CONF_FILE="${INSTALL_DIR}/nodes/node_${cid}.conf"
-                # 检查是否有完整的运行配置（有 node_id= 说明已启动过）
-                local HAS_RUNNING_CONF=false
-                if [ -f "${CONF_FILE}" ] && grep -q "^node_id=" "${CONF_FILE}" 2>/dev/null; then
-                    HAS_RUNNING_CONF=true
-                fi
-                if ! ${HAS_RUNNING_CONF}; then
-                    echo -e "  Node ${cid}: ${YELLOW}待启动${NC} (默认=${GLOBAL_TYPE}，启动时按面板自动识别) ${YELLOW}[需重启]${NC}"
-                fi
-            done
+            _show_node_status
             ;;
         *)
             echo "用法: $(context_command "node") [list|add|del] [节点ID]"
@@ -3525,7 +3365,7 @@ show_menu() {
     printf "  ${GREEN}%2s.${NC} %s\n" "5" "查看日志"
 
     echo -e "${CYAN}${MENU_DIVIDER}${NC}"
-    printf "  ${GREEN}%2s.${NC} %s\n" "6" "查看配置"
+    printf "  ${GREEN}%2s.${NC} %s\n" "6" "查看配置摘要"
     printf "  ${GREEN}%2s.${NC} %s\n" "7" "修改配置"
     printf "  ${GREEN}%2s.${NC} %s\n" "8" "节点管理"
     printf "  ${GREEN}%2s.${NC} %s\n" "9" "重新配置引导"
@@ -3591,7 +3431,9 @@ show_help() {
 
     echo ""
     echo "========== 配置与节点 =========="
-    echo "  config             查看配置"
+    echo "  config             查看默认值摘要和节点启动状态"
+    echo "  config --raw       查看完整主配置原文（含高级面板协议参数）"
+    echo "  config --effective 查看各节点参数的最终值及来源"
     echo "  config k=v k2=v2   快速修改配置项"
     echo "  modify             交互式修改配置"
     echo "  setup              交互式配置引导"
@@ -3635,7 +3477,7 @@ show_help() {
     echo ""
     echo "========== 参数说明 =========="
     echo "  面板类型: sspanel-uim, metron, xboard, v2board, xiaov2board, ppanel, heki-v1"
-    echo "  后端类型(server_type 必填): v2ray(vmess), vless, ss, ssr, trojan, hysteria, tuic, anytls, naive, mieru"
+    echo "  面板协议选择/探测提示(server_type 必填，不代表当前节点协议): v2ray(vmess), vless, ss, ssr, trojan, hysteria, tuic, anytls, naive, mieru"
 
     echo ""
     echo "不带参数运行将显示交互式管理菜单"

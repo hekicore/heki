@@ -4,7 +4,9 @@
 # ---- 面板配置 ----
 # 面板类型，可选: sspanel-uim, metron, xboard, v2board, xiaov2board, ppanel, heki-v1
 type=sspanel-uim
-# server_type 必填，支持: v2ray(vmess), vmess, vless, ss, ssr, trojan, hysteria, tuic, anytls, naive, mieru
+# server_type 用于面板协议选择/启动探测，不代表各节点当前协议
+# PPanel 多协议节点会用它选择协议；已有配置请保留此项
+# 必填，支持: v2ray(vmess), vmess, vless, ss, ssr, trojan, hysteria, tuic, anytls, naive, mieru
 # 混合协议节点会在启动时按面板配置自动识别，无需在 /etc/heki/nodes/node_xxx.conf 中单独填写 server_type
 server_type=v2ray
 panel_url=https://your-panel.com
@@ -124,6 +126,11 @@ node_id=1
 # 留空则关闭；面板若下发合法 decryption/encryption_settings 也会自动识别
 # 当前不支持与 xtls-rprx-vision / fallback 混用
 # vless_decryption=mlkem768x25519plus.native.600s.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+
+# ---- Hysteria2 ECH 可选项 ----
+# 面板下发真实服务端 keyset 时自动启用；本地显式值优先，也支持节点 [USER] 覆盖
+# 必须包含私钥；客户端 ech_config 不能代替服务端 keyset，修改后重启实例
+# hysteria_ech_server_keys=BASE64_ECH_KEYSET
 
 # ---- TUIC 可选项 ----
 # 拥塞控制算法（默认 cubic）
