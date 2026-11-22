@@ -9,8 +9,8 @@ plain='\033[0m'
 
 cur_dir=$(pwd)
 SERVICE_MANAGER=""
-SYSTEMD_SERVICE_DIR="/etc/systemd/system"
-OPENRC_SERVICE_FILE="/etc/init.d/heki"
+SYSTEMD_SERVICE_DIR="${HEKI_SYSTEMD_SERVICE_DIR:-/etc/systemd/system}"
+OPENRC_SERVICE_FILE="${HEKI_OPENRC_SERVICE_FILE:-/etc/init.d/heki}"
 OPENRC_LOG_DIR="/var/log/heki"
 OPENRC_PIDFILE="/run/heki.pid"
 OPENRC_RUNLEVEL="default"
@@ -79,70 +79,83 @@ print_post_install_guide() {
     echo "  heki help            查看完整命令说明"
 }
 
-# check root
-[[ $EUID -ne 0 ]] && echo -e "${red}错误：${plain} 必须使用root用户运行此脚本！\n" && exit 1
-
-# check os
-if [[ -f /etc/redhat-release ]]; then
-    release="centos"
-elif [[ -f /etc/alpine-release ]]; then
-    release="alpine"
-elif [[ -f /etc/os-release ]] && grep -Eq '^ID="?alpine"?$' /etc/os-release; then
-    release="alpine"
-elif cat /etc/issue | grep -Eqi "debian"; then
-    release="debian"
-elif cat /etc/issue | grep -Eqi "ubuntu"; then
-    release="ubuntu"
-elif cat /etc/issue | grep -Eqi "centos|red hat|redhat"; then
-    release="centos"
-elif cat /proc/version | grep -Eqi "debian"; then
-    release="debian"
-elif cat /proc/version | grep -Eqi "ubuntu"; then
-    release="ubuntu"
-elif cat /proc/version | grep -Eqi "centos|red hat|redhat"; then
-    release="centos"
-elif cat /proc/version | grep -Eqi "alpine"; then
-    release="alpine"
-else
-    echo -e "${red}未检测到系统版本，请联系脚本作者！${plain}\n" && exit 1
-fi
-
-arch=$(arch)
-
-if [[ $arch == "x86_64" || $arch == "x64" || $arch == "amd64" ]]; then
-    arch="amd64"
-elif [[ $arch == "aarch64" || $arch == "arm64" ]]; then
-    arch="arm64"
-else
-    arch="amd64"
-    echo -e "${red}检测架构失败，使用默认架构: ${arch}${plain}"
-fi
-
-# 解析参数
 INSTALL_BETA=false
 INSTALL_VERSION=""
-for arg in "$@"; do
-    case "${arg}" in
-        --beta|-beta|beta)
-            INSTALL_BETA=true
-            ;;
-        *)
-            # 非 beta 参数视为版本号
-            if [ -z "${INSTALL_VERSION}" ] && echo "${arg}" | grep -qE '^[0-9]'; then
-                INSTALL_VERSION="${arg}"
-            fi
-            ;;
-    esac
-done
+release="${release:-debian}"
+arch="${arch:-amd64}"
 
-if [ "$(getconf LONG_BIT 2>/dev/null)" != '64' ] ; then
-    echo "本软件不支持 32 位系统(x86)，请使用 64 位系统(x86_64)，如果检测有误，请联系作者"
-    exit 2
+# 测试可 source 脚本并只加载函数；正常执行仍完整检查 root、OS、架构和参数。
+if [[ "${HEKI_INSTALL_LIB_ONLY:-0}" != "1" ]]; then
+    # check root
+    [[ $EUID -ne 0 ]] && echo -e "${red}错误：${plain} 必须使用root用户运行此脚本！\n" && exit 1
+
+    # check os
+    if [[ -f /etc/redhat-release ]]; then
+        release="centos"
+    elif [[ -f /etc/alpine-release ]]; then
+        release="alpine"
+    elif [[ -f /etc/os-release ]] && grep -Eq '^ID="?alpine"?$' /etc/os-release; then
+        release="alpine"
+    elif cat /etc/issue | grep -Eqi "debian"; then
+        release="debian"
+    elif cat /etc/issue | grep -Eqi "ubuntu"; then
+        release="ubuntu"
+    elif cat /etc/issue | grep -Eqi "centos|red hat|redhat"; then
+        release="centos"
+    elif cat /proc/version | grep -Eqi "debian"; then
+        release="debian"
+    elif cat /proc/version | grep -Eqi "ubuntu"; then
+        release="ubuntu"
+    elif cat /proc/version | grep -Eqi "centos|red hat|redhat"; then
+        release="centos"
+    elif cat /proc/version | grep -Eqi "alpine"; then
+        release="alpine"
+    else
+        echo -e "${red}未检测到系统版本，请联系脚本作者！${plain}\n" && exit 1
+    fi
+
+    arch=$(arch)
+    if [[ $arch == "x86_64" || $arch == "x64" || $arch == "amd64" ]]; then
+        arch="amd64"
+    elif [[ $arch == "aarch64" || $arch == "arm64" ]]; then
+        arch="arm64"
+    else
+        arch="amd64"
+        echo -e "${red}检测架构失败，使用默认架构: ${arch}${plain}"
+    fi
+
+    # 解析参数
+    for arg in "$@"; do
+        case "${arg}" in
+            --beta|-beta|beta)
+                INSTALL_BETA=true
+                ;;
+            *)
+                # 非 beta 参数视为版本号
+                if [ -z "${INSTALL_VERSION}" ] && echo "${arg}" | grep -qE '^[0-9]'; then
+                    INSTALL_VERSION="${arg}"
+                fi
+                ;;
+        esac
+    done
+
+    if [ "$(getconf LONG_BIT 2>/dev/null)" != '64' ] ; then
+        echo "本软件不支持 32 位系统(x86)，请使用 64 位系统(x86_64)，如果检测有误，请联系作者"
+        exit 2
+    fi
 fi
 
 # ============ 配置区 ============
 GITHUB_REPO="hekicore/heki"
-MGMT_SCRIPT_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/master/heki.sh"
+HEKI_RELEASE_BASE_URL="${HEKI_RELEASE_BASE_URL:-}"
+HEKI_BINARY_TARBALL_PREFIX="${HEKI_BINARY_TARBALL_PREFIX:-heki-linux}"
+HEKI_INSTALL_PINNED_VERSION="${HEKI_INSTALL_PINNED_VERSION:-}"
+HEKI_MGMT_SCRIPT_URL="${HEKI_MGMT_SCRIPT_URL:-}"
+MGMT_SCRIPT_URL="${HEKI_MGMT_SCRIPT_URL:-https://raw.githubusercontent.com/${GITHUB_REPO}/master/heki.sh}"
+HEKI_INSTALL_DIR="${HEKI_INSTALL_DIR:-/usr/local/heki}"
+HEKI_CONFIG_DIR="${HEKI_CONFIG_DIR:-/etc/heki}"
+HEKI_MGMT_SCRIPT_PATH="${HEKI_MGMT_SCRIPT_PATH:-/usr/bin/heki}"
+HEKI_INSTALL_HEALTH_DELAY="${HEKI_INSTALL_HEALTH_DELAY:-2}"
 # ================================
 
 require_secure_url() {
@@ -189,6 +202,22 @@ verify_release_tarball() {
     fi
 
     listing=$(tar -tzf "${tarball}")
+    local entry
+    while IFS= read -r entry; do
+        case "${entry}" in
+            heki|heki/|heki/*) ;;
+            *)
+                echo -e "${red}发布包包含非法顶层路径: ${entry}${plain}"
+                return 1
+                ;;
+        esac
+        case "/${entry}/" in
+            */../*|*/./*)
+                echo -e "${red}发布包包含不安全路径: ${entry}${plain}"
+                return 1
+                ;;
+        esac
+    done <<< "${listing}"
     for required in "heki/heki" "heki/heki.service" "heki/heki@.service" "heki/heki.conf"; do
         if ! echo "${listing}" | grep -qx "${required}"; then
             echo -e "${red}发布包缺少必要文件 ${required}: ${tarball}${plain}"
@@ -344,12 +373,13 @@ EOF
 }
 
 install_runtime_service_files() {
+    local source_dir="${1:-.}"
     rm -f "${SYSTEMD_SERVICE_DIR}/heki.service" "${SYSTEMD_SERVICE_DIR}/heki@.service" "${OPENRC_SERVICE_FILE}"
 
     if [[ "${SERVICE_MANAGER}" == "openrc" ]]; then
         mkdir -p "$(dirname "${OPENRC_SERVICE_FILE}")"
-        if [[ -f "heki.openrc" ]]; then
-            install -m 755 "heki.openrc" "${OPENRC_SERVICE_FILE}"
+        if [[ -f "${source_dir}/heki.openrc" && ! -L "${source_dir}/heki.openrc" ]]; then
+            install -m 755 "${source_dir}/heki.openrc" "${OPENRC_SERVICE_FILE}"
         else
             write_openrc_service_file "${OPENRC_SERVICE_FILE}"
         fi
@@ -357,8 +387,8 @@ install_runtime_service_files() {
     fi
 
     mkdir -p "${SYSTEMD_SERVICE_DIR}"
-    cp -f heki.service "${SYSTEMD_SERVICE_DIR}/"
-    cp -f heki@.service "${SYSTEMD_SERVICE_DIR}/"
+    install -m 644 "${source_dir}/heki.service" "${SYSTEMD_SERVICE_DIR}/heki.service"
+    install -m 644 "${source_dir}/heki@.service" "${SYSTEMD_SERVICE_DIR}/heki@.service"
 }
 
 install_base() {
@@ -437,7 +467,8 @@ install_mgmt_script() {
     fi
 
     rm -f /tmp/heki-script-check.err
-    install -m 755 "${tmp_script}" /usr/bin/heki
+    mkdir -p "$(dirname "${HEKI_MGMT_SCRIPT_PATH}")"
+    install -m 755 "${tmp_script}" "${HEKI_MGMT_SCRIPT_PATH}"
     rm -f "${tmp_script}"
 }
 
@@ -450,9 +481,9 @@ download_release_tarball() {
         return 1
     fi
 
-    candidates+=("https://github.com/${GITHUB_REPO}/releases/download/${version}/heki-linux-${arch}.tar.gz")
+    candidates+=("https://github.com/${GITHUB_REPO}/releases/download/${version}/${HEKI_BINARY_TARBALL_PREFIX}-${arch}.tar.gz")
     if [[ ! "${version}" =~ ^v ]]; then
-        candidates+=("https://github.com/${GITHUB_REPO}/releases/download/v${version}/heki-linux-${arch}.tar.gz")
+        candidates+=("https://github.com/${GITHUB_REPO}/releases/download/v${version}/${HEKI_BINARY_TARBALL_PREFIX}-${arch}.tar.gz")
     fi
 
     local url
@@ -467,21 +498,205 @@ download_release_tarball() {
     return 1
 }
 
+# 将当前新目录移开，再把旧目录放回原路径。所有 mv 都检查错误；
+# 如果 mv 在实际移动后返回错误，则根据目录现状继续恢复，而不是假定没有移动。
+restore_previous_install_dir() {
+    local install_parent failed_dir
+    if [[ -z "${HEKI_INSTALL_BACKUP_DIR}" || ! -d "${HEKI_INSTALL_BACKUP_DIR}" ]]; then
+        echo -e "${red}没有可恢复的旧版本目录备份${plain}"
+        return 1
+    fi
+    install_parent="$(dirname "${HEKI_INSTALL_DIR}")"
+    HEKI_INSTALL_FAILED_DIR=""
+
+    if [[ -e "${HEKI_INSTALL_DIR}" || -L "${HEKI_INSTALL_DIR}" ]]; then
+        failed_dir="$(mktemp -d "${install_parent}/.heki-failed.XXXXXX")" || return 1
+        rmdir "${failed_dir}" || return 1
+        if ! mv -- "${HEKI_INSTALL_DIR}" "${failed_dir}"; then
+            if [[ -e "${HEKI_INSTALL_DIR}" || -L "${HEKI_INSTALL_DIR}" ]]; then
+                echo -e "${red}新版本目录移出失败，旧版本备份仍位于 ${HEKI_INSTALL_BACKUP_DIR}${plain}"
+                return 1
+            fi
+            # 当前目录已消失，说明 mv 可能移动后报错；保留现场并继续恢复旧版。
+            [[ -d "${failed_dir}" ]] && HEKI_INSTALL_FAILED_DIR="${failed_dir}"
+        else
+            HEKI_INSTALL_FAILED_DIR="${failed_dir}"
+        fi
+    fi
+
+    if ! mv -- "${HEKI_INSTALL_BACKUP_DIR}" "${HEKI_INSTALL_DIR}"; then
+        if [[ ! -d "${HEKI_INSTALL_DIR}" || -e "${HEKI_INSTALL_BACKUP_DIR}" || -L "${HEKI_INSTALL_BACKUP_DIR}" ]]; then
+            echo -e "${red}旧版本目录恢复失败，备份仍位于 ${HEKI_INSTALL_BACKUP_DIR}${plain}"
+            return 1
+        fi
+        echo -e "${yellow}旧版本目录已移动但 mv 返回错误，按目录现状继续恢复${plain}"
+    fi
+    if [[ ! -d "${HEKI_INSTALL_DIR}" ]]; then
+        echo -e "${red}旧版本目录恢复后仍不存在，请人工检查${plain}"
+        return 1
+    fi
+    HEKI_INSTALL_BACKUP_DIR=""
+    return 0
+}
+
+activate_staged_release() {
+    local staged_dir="$1"
+    local install_parent
+    install_parent="$(dirname "${HEKI_INSTALL_DIR}")"
+    HEKI_INSTALL_BACKUP_DIR=""
+    HEKI_INSTALL_FAILED_DIR=""
+    HEKI_INSTALL_ACTIVATED=0
+
+    if [[ ! -d "${staged_dir}" || -L "${staged_dir}" || ! -f "${staged_dir}/heki" || -L "${staged_dir}/heki" ]]; then
+        echo -e "${red}暂存目录结构无效，拒绝切换: ${staged_dir}${plain}"
+        return 1
+    fi
+    if [[ -e "${HEKI_INSTALL_DIR}" || -L "${HEKI_INSTALL_DIR}" ]]; then
+        HEKI_INSTALL_BACKUP_DIR="$(mktemp -d "${install_parent}/.heki-backup.XXXXXX")" || return 1
+        rmdir "${HEKI_INSTALL_BACKUP_DIR}" || return 1
+        if ! mv -- "${HEKI_INSTALL_DIR}" "${HEKI_INSTALL_BACKUP_DIR}"; then
+            echo -e "${red}无法备份旧版本，未执行安装切换${plain}"
+            if [[ ! -e "${HEKI_INSTALL_DIR}" && ! -L "${HEKI_INSTALL_DIR}" && -d "${HEKI_INSTALL_BACKUP_DIR}" ]]; then
+                # 旧目录可能已经被移动；立即尝试放回去。
+                if mv -- "${HEKI_INSTALL_BACKUP_DIR}" "${HEKI_INSTALL_DIR}"; then
+                    HEKI_INSTALL_BACKUP_DIR=""
+                elif [[ -d "${HEKI_INSTALL_DIR}" && ! -e "${HEKI_INSTALL_BACKUP_DIR}" && ! -L "${HEKI_INSTALL_BACKUP_DIR}" ]]; then
+                    echo -e "${yellow}旧版本目录已移动但恢复 mv 返回错误，按目录现状继续${plain}"
+                    HEKI_INSTALL_BACKUP_DIR=""
+                else
+                    echo -e "${red}旧版本恢复失败，备份位于 ${HEKI_INSTALL_BACKUP_DIR}${plain}"
+                fi
+            elif [[ -e "${HEKI_INSTALL_DIR}" || -L "${HEKI_INSTALL_DIR}" ]]; then
+                HEKI_INSTALL_BACKUP_DIR=""
+            fi
+            return 1
+        fi
+    fi
+    if ! mv -- "${staged_dir}" "${HEKI_INSTALL_DIR}"; then
+        echo -e "${red}新版本目录切换失败${plain}"
+        if [[ -n "${HEKI_INSTALL_BACKUP_DIR}" ]]; then
+            restore_previous_install_dir || echo -e "${red}切换失败后的旧版本恢复未完成${plain}"
+        elif [[ -e "${HEKI_INSTALL_DIR}" || -L "${HEKI_INSTALL_DIR}" ]]; then
+            # 没有旧版时只清理本次新目录，绝不触碰其他路径。
+            rm -rf -- "${HEKI_INSTALL_DIR}" || echo -e "${red}新目录清理失败: ${HEKI_INSTALL_DIR}${plain}"
+        fi
+        return 1
+    fi
+    HEKI_INSTALL_ACTIVATED=1
+}
+
+rollback_installed_release() {
+    local service_file_installer="$1"
+    local config_backup="${2:-}"
+    local service_was_running="${3:-1}"
+    local result=0 directory_restored=0
+    if [[ -z "${HEKI_INSTALL_BACKUP_DIR}" || ! -d "${HEKI_INSTALL_BACKUP_DIR}" ]]; then
+        echo -e "${red}没有可恢复的旧版本备份${plain}"
+        return 1
+    fi
+
+    echo -e "${yellow}新版本启用失败，正在恢复旧版本 ${HEKI_INSTALL_BACKUP_DIR}${plain}"
+    systemctl stop heki >/dev/null 2>&1 || echo -e "${yellow}停止新版本服务失败，继续尝试目录恢复${plain}"
+    if restore_previous_install_dir; then
+        directory_restored=1
+        HEKI_INSTALL_ACTIVATED=0
+    else
+        result=1
+    fi
+    # 即使目录恢复失败也尝试恢复配置；配置备份不能在此时被清理。
+    if [[ -n "${config_backup}" && -f "${config_backup}" ]]; then
+        if ! cp -p "${config_backup}" "${HEKI_CONFIG_DIR}/heki.conf"; then
+            echo -e "${red}旧配置恢复失败，备份位于 ${config_backup}${plain}"
+            result=1
+        fi
+    fi
+    if [[ "${directory_restored}" == "1" ]]; then
+        if ! "${service_file_installer}" "${HEKI_INSTALL_DIR}"; then
+            echo -e "${red}旧服务文件恢复失败，请人工检查${plain}"
+            result=1
+        fi
+        if ! systemctl daemon-reload; then
+            echo -e "${red}旧服务文件重新加载失败${plain}"
+            result=1
+        fi
+        if [[ "${service_was_running}" == "1" ]]; then
+            if ! systemctl start heki; then
+                echo -e "${red}旧版本已恢复，但服务启动失败，请人工检查${plain}"
+                result=1
+            fi
+        fi
+    fi
+    if [[ "${result}" != "0" ]]; then
+        return 1
+    fi
+    HEKI_INSTALL_ACTIVATED=0
+    if [[ -n "${HEKI_INSTALL_FAILED_DIR}" ]]; then
+        rm -rf -- "${HEKI_INSTALL_FAILED_DIR}"
+        HEKI_INSTALL_FAILED_DIR=""
+    fi
+    echo -e "${green}已恢复旧版本: ${HEKI_INSTALL_DIR}${plain}"
+}
+
+# 安装任一步骤失败时统一回滚。回滚未完全成功则保留 work_dir，
+# 其中的配置备份和错误现场不能被无条件 rm -rf 清理掉。
+fail_install_and_rollback() {
+    local service_file_installer="$1"
+    local config_backup="$2"
+    local work_dir="$3"
+    local service_was_running="${4:-1}"
+    if [[ -n "${HEKI_INSTALL_BACKUP_DIR}" ]]; then
+        if ! rollback_installed_release "${service_file_installer}" "${config_backup}" "${service_was_running}"; then
+            echo -e "${red}自动回滚未完全成功，保留现场和配置备份: ${work_dir}${plain}"
+            return 1
+        fi
+    else
+        if [[ "${HEKI_INSTALL_ACTIVATED:-0}" == "1" ]]; then
+            systemctl stop heki >/dev/null 2>&1 || true
+            if ! rm -rf -- "${HEKI_INSTALL_DIR}"; then
+                echo -e "${red}新安装目录清理失败，保留现场: ${HEKI_INSTALL_DIR}${plain}"
+                return 1
+            fi
+            HEKI_INSTALL_ACTIVATED=0
+        fi
+        if [[ "${HEKI_INSTALL_CONFIG_CREATED:-0}" == "1" ]]; then
+            rm -f -- "${HEKI_CONFIG_DIR}/heki.conf" || return 1
+            HEKI_INSTALL_CONFIG_CREATED=0
+        fi
+    fi
+    rm -rf -- "${work_dir}"
+    return 1
+}
+
 install_heki() {
-    cd /usr/local/
-    if [[ -e /usr/local/heki/ ]]; then
-        rm /usr/local/heki/ -rf
+    local install_parent work_dir tarball unpack_dir staged_dir last_version raw_version beta_tag
+    local all_releases current_tag had_config health_status service_was_running
+    local config_backup runtime_file required_file
+    install_parent="$(dirname "${HEKI_INSTALL_DIR}")"
+    mkdir -p "${install_parent}" || return 1
+    work_dir="$(mktemp -d "${install_parent}/.heki-install.XXXXXX")" || return 1
+    tarball="${work_dir}/heki.tar.gz"
+    unpack_dir="${work_dir}/unpacked"
+    staged_dir="${unpack_dir}/heki"
+    config_backup="${work_dir}/heki.conf.previous"
+    HEKI_INSTALL_BACKUP_DIR=""
+    HEKI_INSTALL_FAILED_DIR=""
+    HEKI_INSTALL_ACTIVATED=0
+    HEKI_INSTALL_CONFIG_CREATED=0
+    had_config=0
+    if [[ -f "${HEKI_CONFIG_DIR}/heki.conf" ]]; then
+        had_config=1
     fi
 
     print_subsection "下载并安装 Heki"
     if ${INSTALL_BETA}; then
         # 测试版: 从最新的 pre-release 下载
         echo -e "${yellow}安装 heki 测试版 (beta)${plain}"
-        # 用 GitHub API 获取所有 release，找到第一个 prerelease 的 tag_name
-        # API 返回按时间倒序，逐个 release 对象扫描，找到第一个 prerelease=true 的
-        all_releases=$(curl -sL "https://api.github.com/repos/${GITHUB_REPO}/releases")
+        if ! all_releases=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases"); then
+            echo -e "${red}获取 heki 测试版列表失败${plain}"
+            rm -rf -- "${work_dir}"
+            return 1
+        fi
         beta_tag=""
-        # 简单状态机：遇到 tag_name 记住，遇到 prerelease: true 就确认
         current_tag=""
         while IFS= read -r line; do
             if echo "${line}" | grep -q '"tag_name"'; then
@@ -493,79 +708,172 @@ install_heki() {
                     break
                 fi
             fi
-            # 遇到下一个 release 对象的 tag_name 前，如果 prerelease 是 false 就重置
             if echo "${line}" | grep -q '"prerelease": false'; then
                 current_tag=""
             fi
         done <<< "${all_releases}"
         if [[ -z "${beta_tag}" ]]; then
             echo -e "${red}未找到 beta 版本，请确认是否已发布测试版${plain}"
-            exit 1
+            rm -rf -- "${work_dir}"
+            return 1
         fi
         echo -e "最新测试版: ${beta_tag}"
-        if ! download_release_tarball "${beta_tag}" "/usr/local/heki.tar.gz"; then
-            echo -e "${red}下载 heki ${beta_tag} 失败${plain}"
-            exit 1
+        if ! download_release_tarball "${beta_tag}" "${tarball}"; then
+            echo -e "${red}下载 heki ${beta_tag} 失败，旧版本保持不变${plain}"
+            rm -rf -- "${work_dir}"
+            return 1
         fi
     elif [[ -n "${INSTALL_VERSION}" ]]; then
         last_version="${INSTALL_VERSION}"
         echo -e "开始安装 heki v${last_version}"
-        if ! download_release_tarball "${last_version}" "/usr/local/heki.tar.gz"; then
-            echo -e "${red}下载 heki v${last_version} 失败，请确保此版本存在${plain}"
-            exit 1
+        if ! download_release_tarball "${last_version}" "${tarball}"; then
+            echo -e "${red}下载 heki v${last_version} 失败，旧版本保持不变${plain}"
+            rm -rf -- "${work_dir}"
+            return 1
         fi
     else
         echo -e "开始安装 heki 最新正式版"
-        if ! download_file "https://github.com/${GITHUB_REPO}/releases/latest/download/heki-linux-${arch}.tar.gz" "/usr/local/heki.tar.gz" || \
-            ! verify_release_tarball "/usr/local/heki.tar.gz"; then
-            echo -e "${red}下载 heki 失败，请确保你的服务器能够下载 Github 的文件${plain}"
+        if ! download_file "https://github.com/${GITHUB_REPO}/releases/latest/download/${HEKI_BINARY_TARBALL_PREFIX}-${arch}.tar.gz" "${tarball}" || \
+            ! verify_release_tarball "${tarball}"; then
+            echo -e "${red}下载 heki 失败，旧版本保持不变${plain}"
+            rm -rf -- "${work_dir}"
+            return 1
+        fi
+    fi
+
+    mkdir -p "${unpack_dir}"
+    if ! tar -xzf "${tarball}" -C "${unpack_dir}"; then
+        echo -e "${red}发布包解包失败，旧版本保持不变${plain}"
+        rm -rf -- "${work_dir}"
+        return 1
+    fi
+    for required_file in heki heki.service heki@.service heki.conf; do
+        if [[ ! -f "${staged_dir}/${required_file}" || -L "${staged_dir}/${required_file}" ]]; then
+            echo -e "${red}发布包文件无效: ${required_file}${plain}"
+            rm -rf -- "${work_dir}"
+            return 1
+        fi
+    done
+    chmod 755 "${staged_dir}/heki"
+    if ! raw_version="$("${staged_dir}/heki" -v)"; then
+        echo -e "${red}新版本二进制无法执行，旧版本保持不变${plain}"
+        rm -rf -- "${work_dir}"
+        return 1
+    fi
+    last_version="$(normalize_version_output "${raw_version}")"
+
+    mkdir -p "${HEKI_CONFIG_DIR}"
+    if [[ "${had_config}" == "1" ]] && ! cp -p "${HEKI_CONFIG_DIR}/heki.conf" "${config_backup}"; then
+        echo -e "${red}无法备份现有配置，取消安装${plain}"
+        rm -rf -- "${work_dir}"
+        return 1
+    fi
+
+    service_was_running=0
+    if check_status; then
+        service_was_running=1
+    fi
+    # 停服切换到健康检查通过之间收到 INT/TERM 时，按当前状态回滚或恢复旧版服务。
+    # work_dir 为空说明函数已返回（局部变量失效），不在切换窗口内，直接退出。
+    trap '
+        if [[ -z "${work_dir}" ]]; then
             exit 1
         fi
+        if [[ -n "${HEKI_INSTALL_BACKUP_DIR}" || "${HEKI_INSTALL_ACTIVATED:-0}" == "1" ]]; then
+            fail_install_and_rollback install_runtime_service_files "${config_backup}" "${work_dir}" "${service_was_running}" || true
+        elif [[ "${service_was_running}" == "1" ]]; then
+            systemctl start heki >/dev/null 2>&1 || true
+        fi
+        exit 1
+    ' INT TERM
+    if [[ "${service_was_running}" == "1" ]]; then
+        if ! systemctl stop heki; then
+            echo -e "${red}无法停止现有服务，取消切换${plain}"
+            rm -rf -- "${work_dir}"
+            return 1
+        fi
+    else
+        systemctl stop heki >/dev/null 2>&1 || true
     fi
 
-    tar zxvf heki.tar.gz
-    rm heki.tar.gz -f
-    cd heki
-    chmod +x heki
-    last_version="$(normalize_version_output "$(./heki -v)")"
-    mkdir /etc/heki/ -p
-    install_runtime_service_files
-    systemctl daemon-reload
-    systemctl stop heki
-    systemctl enable heki
-    echo -e "${green}heki v${last_version}${plain} 安装完成，已设置开机自启 (${SERVICE_MANAGER})"
-    if [[ ! -f /etc/heki/heki.conf ]]; then
-        cp heki.conf /etc/heki/
-        echo -e ""
-        echo -e "全新安装，请先配置必要的内容"
-    else
-        systemctl start heki
-        sleep 2
-        check_status
-        echo -e ""
-        if [[ $? == 0 ]]; then
-            echo -e "${green}heki 重启成功${plain}"
-        else
-            echo -e "${red}heki 可能启动失败，请稍后使用 heki log 查看日志信息${plain}"
+    if ! activate_staged_release "${staged_dir}"; then
+        if [[ -n "${HEKI_INSTALL_BACKUP_DIR}" ]]; then
+            fail_install_and_rollback install_runtime_service_files "${config_backup}" "${work_dir}" "${service_was_running}" || return 1
+        fi
+        if [[ "${service_was_running}" == "1" && -d "${HEKI_INSTALL_DIR}" && -z "${HEKI_INSTALL_BACKUP_DIR}" ]]; then
+            if ! systemctl start heki; then
+                echo -e "${red}切换失败后旧版本服务启动失败，保留现场: ${work_dir}${plain}"
+                return 1
+            fi
+        fi
+        rm -rf -- "${work_dir}"
+        return 1
+    fi
+    if ! install_runtime_service_files "${HEKI_INSTALL_DIR}" || \
+        ! systemctl daemon-reload || ! systemctl enable heki; then
+        echo -e "${red}新服务文件安装或启用失败${plain}"
+        fail_install_and_rollback install_runtime_service_files "${config_backup}" "${work_dir}" "${service_was_running}" || return 1
+    fi
+
+    if [[ "${had_config}" == "0" ]]; then
+        # 从尝试写入开始就记录“本次新建”，失败时才能清理可能已部分写入的配置。
+        HEKI_INSTALL_CONFIG_CREATED=1
+        if ! install -m 600 "${HEKI_INSTALL_DIR}/heki.conf" "${HEKI_CONFIG_DIR}/heki.conf"; then
+            echo -e "${red}默认配置写入失败${plain}"
+            fail_install_and_rollback install_runtime_service_files "${config_backup}" "${work_dir}" "${service_was_running}" || return 1
+        fi
+        echo -e "\n全新安装，请先配置必要的内容"
+    elif declare -F sync_offline_license_fields_from_bundle >/dev/null 2>&1; then
+        if ! sync_offline_license_fields_from_bundle "${HEKI_INSTALL_DIR}/heki.conf" "${HEKI_CONFIG_DIR}/heki.conf"; then
+            echo -e "${red}离线授权配置同步失败${plain}"
+            fail_install_and_rollback install_runtime_service_files "${config_backup}" "${work_dir}" "${service_was_running}" || return 1
         fi
     fi
 
-    if [[ ! -f /etc/heki/blockList ]]; then
-        cp blockList /etc/heki/
+    for runtime_file in blockList whiteList dns.yml routes.toml; do
+        if [[ -f "${HEKI_INSTALL_DIR}/${runtime_file}" && ! -e "${HEKI_CONFIG_DIR}/${runtime_file}" ]]; then
+            if ! cp "${HEKI_INSTALL_DIR}/${runtime_file}" "${HEKI_CONFIG_DIR}/${runtime_file}"; then
+                echo -e "${red}运行配置 ${runtime_file} 写入失败${plain}"
+                fail_install_and_rollback install_runtime_service_files "${config_backup}" "${work_dir}" "${service_was_running}" || return 1
+            fi
+        fi
+    done
+
+    if [[ "${had_config}" == "1" || -n "${HEKI_INSTALL_BACKUP_DIR}" ]]; then
+        health_status=0
+        if ! systemctl start heki; then
+            health_status=1
+        elif ! sleep "${HEKI_INSTALL_HEALTH_DELAY}"; then
+            health_status=1
+        else
+            check_status
+            health_status=$?
+        fi
+        if [[ "${health_status}" != "0" ]]; then
+            echo -e "${red}新版本健康检查失败${plain}"
+            fail_install_and_rollback install_runtime_service_files "${config_backup}" "${work_dir}" "${service_was_running}" || return 1
+        fi
+        echo -e "${green}heki 重启成功${plain}"
     fi
-    if [[ ! -f /etc/heki/whiteList ]]; then
-        cp whiteList /etc/heki/
+
+    if [[ -n "${HEKI_INSTALL_BACKUP_DIR}" ]]; then
+        rm -rf -- "${HEKI_INSTALL_BACKUP_DIR}"
+        HEKI_INSTALL_BACKUP_DIR=""
     fi
-    if [[ ! -f /etc/heki/dns.yml ]]; then
-        cp dns.yml /etc/heki/
+    if [[ -n "${HEKI_INSTALL_FAILED_DIR}" ]]; then
+        rm -rf -- "${HEKI_INSTALL_FAILED_DIR}"
+        HEKI_INSTALL_FAILED_DIR=""
     fi
-    if [[ ! -f /etc/heki/routes.toml ]]; then
-        cp routes.toml /etc/heki/
-    fi
+    HEKI_INSTALL_ACTIVATED=0
+    HEKI_INSTALL_CONFIG_CREATED=0
+    trap - INT TERM
+    rm -rf -- "${work_dir}"
+    echo -e "${green}heki v${last_version}${plain} 安装完成，已设置开机自启 (${SERVICE_MANAGER})"
     install_mgmt_script
     print_post_install_guide
 }
 
+main() {
 print_banner "Heki 安装脚本"
 echo -e "  系统发行版: ${green}${release}${plain}"
 echo -e "  CPU 架构:   ${green}${arch}${plain}"
@@ -590,17 +898,20 @@ echo -e "  服务管理器: ${green}${SERVICE_MANAGER}${plain}"
 print_subsection "安装可选组件"
 echo -e "  acme.sh 用于自动申请 TLS 证书，不需要自动证书时可忽略"
 install_acme
-install_heki
+if ! install_heki; then
+    echo -e "${red}Heki 安装或升级未完成${plain}"
+    exit 1
+fi
 
 # 首次安装后自动运行配置引导
 # 检查配置文件是否包含必要的配置项（panel_url）
-if [[ -f /etc/heki/heki.conf ]] && grep -q "panel_url=https://your-panel.com" /etc/heki/heki.conf 2>/dev/null; then
+if [[ -f "${HEKI_CONFIG_DIR}/heki.conf" ]] && grep -q "panel_url=https://your-panel.com" "${HEKI_CONFIG_DIR}/heki.conf" 2>/dev/null; then
     print_banner "首次配置引导"
     echo -e "  检测到当前仍是示例配置，即将进入交互式配置"
     echo -e "  按 ${yellow}Ctrl+C${plain} 可跳过，稍后手动执行 ${green}heki setup${plain}"
     sleep 2
     heki setup
-elif [[ ! -f /etc/heki/heki.conf ]]; then
+elif [[ ! -f "${HEKI_CONFIG_DIR}/heki.conf" ]]; then
     print_banner "首次配置引导"
     echo -e "  检测到当前还没有有效配置，即将进入交互式配置"
     echo -e "  按 ${yellow}Ctrl+C${plain} 可跳过，稍后手动执行 ${green}heki setup${plain}"
@@ -610,4 +921,9 @@ else
     print_banner "安装完成"
     echo -e "  运行 ${green}heki setup${plain} 进行配置引导"
     echo -e "  运行 ${green}heki${plain} 查看管理菜单"
+fi
+}
+
+if [[ "${HEKI_INSTALL_LIB_ONLY:-0}" != "1" ]]; then
+    main "$@"
 fi

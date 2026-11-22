@@ -3428,6 +3428,7 @@ show_help() {
     echo "  disable            取消开机自启"
     echo "  version            查看版本"
     echo "  help               查看帮助"
+    echo "  traffic-reconcile  离线确认待处理流量批次（用 -h 查看参数）"
 
     echo ""
     echo "========== 配置与节点 =========="
@@ -3502,6 +3503,13 @@ case "$1" in
     setup)      do_setup ;;
     cert)       do_cert ;;
     reality)    do_reality "$2" ;;
+    traffic-reconcile)
+        if [ ! -x "${BIN_PATH}" ]; then
+            echo -e "${RED}Heki 未安装，请先安装${NC}" >&2
+            exit 1
+        fi
+        exec "${BIN_PATH}" "$@"
+        ;;
     x25519)
         if [ -f "${BIN_PATH}" ]; then
             "${BIN_PATH}" x25519

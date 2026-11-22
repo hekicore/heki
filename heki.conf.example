@@ -190,3 +190,13 @@ node_id=1
 # SS2022 / VMess / 部分 SSR 协议依赖时间戳校验。
 # heki 会在访问面板 API 时自动参考 HTTP Date 头校准内部协议时钟，
 # 但如果宿主机时间严重漂移且面板时间也不可用，仍可能导致握手失败。
+
+# ---- WebSocket 心跳（1.3.1 起，可选）----
+# VMess/VLESS WS 主动 Ping，单位秒，默认 0 关闭，范围 0..86400
+# 可在节点 [USER] 区覆盖；不延长 tcp_timeout / udp_timeout
+# ws_heartbeat=30
+
+# ---- 流量状态目录 ----
+# 默认跟随实例配置目录，必须可写并持久化，多实例使用各自独立目录
+# 只读配置挂载时，另挂载可写目录并设置此项
+# ip_user_cache_save_dir=/var/lib/heki
